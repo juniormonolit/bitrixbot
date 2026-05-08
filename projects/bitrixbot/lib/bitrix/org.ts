@@ -25,33 +25,13 @@ function normalizeDepartmentIdList(v: unknown): string[] {
   return [String(v)].filter(Boolean);
 }
 
-async function fetchAllBitrixPages<T>(
-  method: string,
-  pageSize: number,
-  paramsFactory: (start: number) => Record<string, unknown>
-): Promise<T[]> {
-  const out: T[] = [];
-  for (let start = 0; ; start += pageSize) {
-    const page = await bitrixCall<T[]>(method, paramsFactory(start));
-    out.push(...page);
-    if (!Array.isArray(page) || page.length < pageSize) break;
-  }
-  return out;
-}
-
 export async function fetchBitrixDepartments(): Promise<
   { bitrix_department_id: string; name: string; parent_bitrix_department_id: string | null }[]
 > {
-  const pageSize = 50;
-  const raw = await fetchAllBitrixPages<BitrixDepartment>(
-    "department.get",
-    pageSize,
-    (start) => ({
-      sort: "ID",
-      order: "ASC",
-      START: start
-    })
-  );
+  const raw = await bitrixCall<BitrixDepartment[]>("department.get", {
+    sort: "ID",
+    order: "ASC"
+  });
 
   return raw.map((d) => ({
     bitrix_department_id: String(d.ID),
@@ -63,13 +43,11 @@ export async function fetchBitrixDepartments(): Promise<
 export async function fetchBitrixUsers(): Promise<
   { bitrix_user_id: string; name: string; bitrix_department_id: string | null }[]
 > {
-  const pageSize = 50;
-  const raw = await fetchAllBitrixPages<BitrixUser>("user.get", pageSize, (start) => ({
+  const raw = await bitrixCall<BitrixUser[]>("user.get", {
     sort: "ID",
     order: "ASC",
-    filter: { ACTIVE: true },
-    start
-  }));
+    filter: { ACTIVE: true }
+  });
 
   return raw.map((u) => {
     const firstDeptId = normalizeDepartmentIdList(u.UF_DEPARTMENT)[0] ?? null;
