@@ -8,6 +8,11 @@ export type NormalizedCallEvent = {
   crm_activity_id: string | null;
   bitrix_call_id: string | null;
   occurred_at: string;
+  call_type_raw: string | null;
+  call_duration_seconds: number | null;
+  failed_code: string | null;
+  failed_reason: string | null;
+  call_started_at: string | null;
   raw_payload: unknown;
 };
 
@@ -39,11 +44,11 @@ function getNumber(value: unknown): number | null {
 }
 
 function computeStatus(data: JsonObject): "missed" | "success" | "other" {
-  const failedCode = getNumber(data.CALL_FAILED_CODE);
-  if (failedCode !== null && failedCode !== 0) return "missed";
-
   const duration = getNumber(data.CALL_DURATION);
   if (duration !== null && duration > 0) return "success";
+
+  const failedCodeStr = getString(data.CALL_FAILED_CODE);
+  if (failedCodeStr && failedCodeStr !== "0") return "missed";
 
   return "other";
 }
@@ -52,11 +57,7 @@ export function normalizeBitrixCallEvent(
   eventName: string,
   payload: unknown
 ): NormalizedCallEvent | null {
-  if (
-    eventName !== "ONVOXIMPLANTCALLINIT" &&
-    eventName !== "ONVOXIMPLANTCALLSTART" &&
-    eventName !== "ONVOXIMPLANTCALLEND"
-  ) {
+  if (eventName !== "ONVOXIMPLANTCALLEND") {
     return null;
   }
 
@@ -70,6 +71,7 @@ export function normalizeBitrixCallEvent(
     getString(data.CRM_ACTIVITY_ID) ?? getString(data.crm_activity_id);
 
   const managerUserId =
+    getString(data.PORTAL_USER_ID) ??
     getString(data.USER_ID) ??
     getString(data.user_id) ??
     getString(auth.user_id) ??
@@ -82,6 +84,11 @@ export function normalizeBitrixCallEvent(
   const dealId = crmEntityType === "DEAL" ? crmEntityId : null;
 
   const status = computeStatus(data);
+  const durationSeconds = getNumber(data.CALL_DURATION);
+  const callTypeRaw = getString(data.CALL_TYPE);
+  const failedCode = getString(data.CALL_FAILED_CODE);
+  const failedReason = getString(data.CALL_FAILED_REASON);
+  const callStartDateRaw = getString(data.CALL_START_DATE);
 
   return {
     manager_bitrix_user_id: managerUserId,
@@ -91,6 +98,11 @@ export function normalizeBitrixCallEvent(
     crm_activity_id: crmActivityId,
     bitrix_call_id: bitrixCallId,
     occurred_at: new Date().toISOString(),
+    call_type_raw: callTypeRaw,
+    call_duration_seconds: durationSeconds !== null ? Math.trunc(durationSeconds) : null,
+    failed_code: failedCode,
+    failed_reason: failedReason,
+    call_started_at: callStartDateRaw,
     raw_payload: payload
   };
 }

@@ -220,6 +220,14 @@ export async function POST(req: Request) {
 
     try {
       if (event && routing.category === "call") {
+        if (event === "ONVOXIMPLANTCALLINIT" || event === "ONVOXIMPLANTCALLSTART") {
+          await supabase
+            .from("bitrix_webhook_events")
+            .update({ processing_status: "ignored" })
+            .eq("id", webhookEventId ?? "");
+          return NextResponse.json({ ok: true, duplicate: false });
+        }
+
         const normalized = normalizeBitrixCallEvent(event, payload);
         if (!normalized) {
           await supabase
@@ -236,6 +244,11 @@ export async function POST(req: Request) {
           status: normalized.status,
           crm_activity_id: normalized.crm_activity_id,
           bitrix_call_id: normalized.bitrix_call_id,
+          call_type_raw: normalized.call_type_raw,
+          call_duration_seconds: normalized.call_duration_seconds,
+          failed_code: normalized.failed_code,
+          failed_reason: normalized.failed_reason,
+          call_started_at: normalized.call_started_at,
           occurred_at: normalized.occurred_at,
           raw_payload: normalized.raw_payload
         });
