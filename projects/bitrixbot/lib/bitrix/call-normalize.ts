@@ -1,14 +1,18 @@
+import { normalizePhoneForAnalytics } from "@/lib/bitrix/phone-normalize";
+
 type JsonObject = Record<string, unknown>;
 
 export type NormalizedCallEvent = {
   manager_bitrix_user_id: string | null;
   bitrix_deal_id: string | null;
   phone: string | null;
+  phone_normalized: string | null;
   status: "missed" | "success" | "other";
   crm_activity_id: string | null;
   bitrix_call_id: string | null;
   occurred_at: string;
   call_type_raw: string | null;
+  call_direction: "inbound" | "outbound" | "unknown";
   call_duration_seconds: number | null;
   failed_code: string | null;
   failed_reason: string | null;
@@ -89,16 +93,20 @@ export function normalizeBitrixCallEvent(
   const failedCode = getString(data.CALL_FAILED_CODE);
   const failedReason = getString(data.CALL_FAILED_REASON);
   const callStartDateRaw = getString(data.CALL_START_DATE);
+  const callDirection =
+    callTypeRaw === "1" ? "inbound" : callTypeRaw === "2" ? "outbound" : "unknown";
 
   return {
     manager_bitrix_user_id: managerUserId,
     bitrix_deal_id: dealId,
     phone,
+    phone_normalized: normalizePhoneForAnalytics(phone),
     status,
     crm_activity_id: crmActivityId,
     bitrix_call_id: bitrixCallId,
     occurred_at: new Date().toISOString(),
     call_type_raw: callTypeRaw,
+    call_direction: callDirection,
     call_duration_seconds: durationSeconds !== null ? Math.trunc(durationSeconds) : null,
     failed_code: failedCode,
     failed_reason: failedReason,
