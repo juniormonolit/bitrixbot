@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { routeBitrixWebhook } from "@/lib/bitrix/webhook-router";
 import { supabaseServiceRoleForRoute } from "@/lib/supabase/route";
 import { normalizeBitrixCallEvent } from "@/lib/bitrix/call-normalize";
+import { normalizeBitrixDealEvent } from "@/lib/bitrix/deal-normalize";
 
 type JsonObject = Record<string, unknown>;
 
@@ -264,6 +265,46 @@ export async function POST(req: Request) {
 
         console.log("[bitrix-bot-handler] call_event inserted", {
           status: normalized.status,
+          durationMs: Date.now() - receivedAt
+        });
+
+        return NextResponse.json({ ok: true, duplicate: false });
+      }
+
+      if (event === "ONCRMDEALADD" || event === "ONCRMDEALUPDATE") {
+        const normalized = normalizeBitrixDealEvent(event, payload);
+        if (!normalized) {
+          await supabase
+            .from("bitrix_webhook_events")
+            .update({ processing_status: "ignored" })
+            .eq("id", webhookEventId ?? "");
+          return NextResponse.json({ ok: true, duplicate: false });
+        }
+
+        const { error: dealErr } = await supabase.from("deal_events").insert({
+          event_name: normalized.event_name,
+          bitrix_deal_id: normalized.bitrix_deal_id,
+          stage_id: normalized.stage_id,
+          category_id: normalized.category_id,
+          assigned_by_id: normalized.assigned_by_id,
+          created_by_id: normalized.created_by_id,
+          title: normalized.title,
+          opportunity: normalized.opportunity,
+          currency: normalized.currency,
+          is_new: normalized.is_new,
+          occurred_at: normalized.occurred_at,
+          raw_payload: normalized.raw_payload
+        });
+        if (dealErr) throw new Error(dealErr.message);
+
+        await supabase
+          .from("bitrix_webhook_events")
+          .update({ processing_status: "processed" })
+          .eq("id", webhookEventId ?? "");
+
+        console.log("[bitrix-bot-handler] deal_event inserted", {
+          event,
+          bitrixDealId: normalized.bitrix_deal_id,
           durationMs: Date.now() - receivedAt
         });
 
