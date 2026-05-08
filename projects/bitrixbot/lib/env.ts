@@ -6,6 +6,8 @@ const envSchema = z.object({
   BITRIX_REST_BASE_URL: z.string().url(),
   BITRIX_PORTAL_URL: z.string().url(),
   BITRIX_APPLICATION_TOKEN: z.string().min(1),
+  BITRIX_BOT_ID: z.string().min(1),
+  BITRIX_BOT_CLIENT_ID: z.string().min(1),
   DEBUG_SECRET: z.string().min(1)
 });
 
@@ -26,6 +28,8 @@ function parseEnv(): Env {
     BITRIX_REST_BASE_URL: process.env.BITRIX_REST_BASE_URL,
     BITRIX_PORTAL_URL: process.env.BITRIX_PORTAL_URL,
     BITRIX_APPLICATION_TOKEN: process.env.BITRIX_APPLICATION_TOKEN,
+    BITRIX_BOT_ID: process.env.BITRIX_BOT_ID,
+    BITRIX_BOT_CLIENT_ID: process.env.BITRIX_BOT_CLIENT_ID,
     DEBUG_SECRET: process.env.DEBUG_SECRET
   };
 
@@ -43,6 +47,7 @@ export const env = parseEnv();
 
 export const envStatus = {
   supabaseConfigured: Boolean(env.NEXT_PUBLIC_SUPABASE_URL),
-  bitrixRestConfigured: Boolean(env.BITRIX_REST_BASE_URL)
+  bitrixRestConfigured: Boolean(env.BITRIX_REST_BASE_URL),
+  botConfigured: Boolean(env.BITRIX_BOT_ID && env.BITRIX_BOT_CLIENT_ID)
 };
 

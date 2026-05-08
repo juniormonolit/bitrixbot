@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { sendSystemNotificationToUser } from "@/lib/bitrix/bot";
+import { sendBotMessageToUser } from "@/lib/bitrix/bot";
 
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => null)) as null | {
@@ -14,7 +14,7 @@ export async function POST(req: Request) {
     );
   }
 
-  await sendSystemNotificationToUser(userId, "Тестовое уведомление Bitrixbot");
+  await sendBotMessageToUser(userId, "Тестовое сообщение от бота Контроль звонков");
   return NextResponse.json({ ok: true });
 }
 
