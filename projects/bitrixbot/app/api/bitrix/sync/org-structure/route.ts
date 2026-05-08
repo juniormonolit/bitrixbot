@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { syncDepartments, syncEmployees } from "@/lib/bitrix/org";
+import { syncDepartments, syncEmployees } from "../../../../../lib/bitrix/org";
 
 export async function POST() {
   const startedAt = Date.now();
