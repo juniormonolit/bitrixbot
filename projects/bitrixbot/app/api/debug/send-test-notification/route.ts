@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { sendBotMessageToUser } from "../../../../lib/bitrix/bot";
+import { sendBotMessageToUser } from "@/lib/bitrix/bot";
 
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => null)) as null | {
