@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { routeBitrixWebhook } from "@/lib/bitrix/webhook-router";
 import { supabaseServiceRoleForRoute } from "@/lib/supabase/route";
+import { normalizeBitrixCallEvent } from "@/lib/bitrix/call-normalize";
 
 type JsonObject = Record<string, unknown>;
 
@@ -43,9 +44,46 @@ async function readBody(req: Request): Promise<Record<string, unknown>> {
   if (contentType.includes("application/x-www-form-urlencoded")) {
     const raw = await req.text();
     const params = new URLSearchParams(raw);
-    const data: Record<string, unknown> = {};
-    for (const [k, v] of params.entries()) data[k] = tryParseJson(v);
-    return data;
+    const out: Record<string, unknown> = {};
+
+    const parseKeyPath = (key: string): string[] => {
+      const parts: string[] = [];
+      const re = /([^[\]]+)|\[([^\]]*)\]/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(key))) {
+        const part = (m[1] ?? m[2] ?? "").trim();
+        if (part) parts.push(part);
+      }
+      return parts.length ? parts : [key];
+    };
+
+    const setDeep = (obj: Record<string, unknown>, path: string[], value: unknown) => {
+      let cur: Record<string, unknown> = obj;
+      for (let i = 0; i < path.length; i++) {
+        const k = path[i]!;
+        const isLast = i === path.length - 1;
+        if (isLast) {
+          cur[k] = value;
+          return;
+        }
+
+        const next = cur[k];
+        if (!next || typeof next !== "object" || Array.isArray(next)) {
+          const created: Record<string, unknown> = {};
+          cur[k] = created;
+          cur = created;
+        } else {
+          cur = next as Record<string, unknown>;
+        }
+      }
+    };
+
+    for (const [k, v] of params.entries()) {
+      const value = tryParseJson(v);
+      setDeep(out, parseKeyPath(k), value);
+    }
+
+    return out;
   }
 
   if (contentType.includes("application/json")) {
@@ -119,6 +157,7 @@ function buildDedupeKey(eventName: string | null, eventToken: string | null, pay
 }
 
 export async function POST(req: Request) {
+  const receivedAt = Date.now();
   try {
     const body = await readBody(req);
 
@@ -148,13 +187,17 @@ export async function POST(req: Request) {
     });
 
     const supabase = supabaseServiceRoleForRoute();
-    const { error } = await supabase.from("bitrix_webhook_events").insert({
+    const { data: inserted, error } = await supabase
+      .from("bitrix_webhook_events")
+      .insert({
       event_name: event,
       event_token: eventToken,
       dedupe_key: dedupeKey,
       payload,
       processing_status: "pending"
-    });
+      })
+      .select("id")
+      .single();
 
     if (error) {
       const code = (error as { code?: string }).code;
@@ -173,7 +216,59 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ ok: true, duplicate: false });
+    const webhookEventId = inserted?.id as string | undefined;
+
+    try {
+      if (event && routing.category === "call") {
+        const normalized = normalizeBitrixCallEvent(event, payload);
+        if (!normalized) {
+          await supabase
+            .from("bitrix_webhook_events")
+            .update({ processing_status: "ignored" })
+            .eq("id", webhookEventId ?? "");
+          return NextResponse.json({ ok: true, duplicate: false });
+        }
+
+        const { error: callErr } = await supabase.from("call_events").insert({
+          manager_bitrix_user_id: normalized.manager_bitrix_user_id,
+          bitrix_deal_id: normalized.bitrix_deal_id,
+          phone: normalized.phone,
+          status: normalized.status,
+          crm_activity_id: normalized.crm_activity_id,
+          bitrix_call_id: normalized.bitrix_call_id,
+          occurred_at: normalized.occurred_at,
+          raw_payload: normalized.raw_payload
+        });
+
+        if (callErr) throw new Error(callErr.message);
+
+        await supabase
+          .from("bitrix_webhook_events")
+          .update({ processing_status: "processed" })
+          .eq("id", webhookEventId ?? "");
+
+        console.log("[bitrix-bot-handler] call_event inserted", {
+          status: normalized.status,
+          durationMs: Date.now() - receivedAt
+        });
+
+        return NextResponse.json({ ok: true, duplicate: false });
+      }
+
+      await supabase
+        .from("bitrix_webhook_events")
+        .update({ processing_status: "ignored" })
+        .eq("id", webhookEventId ?? "");
+
+      return NextResponse.json({ ok: true, duplicate: false });
+    } catch (inner) {
+      const msg = inner instanceof Error ? inner.message : String(inner);
+      await supabase
+        .from("bitrix_webhook_events")
+        .update({ processing_status: "failed", error_message: msg })
+        .eq("id", webhookEventId ?? "");
+      throw inner;
+    }
   } catch (e) {
     console.log("[bitrix-bot-handler] error", {
       message: e instanceof Error ? e.message : String(e)
