@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { envStatus } from "@/lib/env";
 
 function StatusRow({
@@ -46,6 +47,21 @@ export default function HomePage() {
           ok={envStatus.bitrixRestConfigured}
           detail="BITRIX_REST_BASE_URL"
         />
+      </section>
+
+      <section className="space-y-3 rounded-xl border border-white/10 bg-white/5 p-5">
+        <Link
+          href="/admin/alerting"
+          className="inline-flex rounded-lg bg-white/15 px-4 py-2.5 text-sm font-medium text-white hover:bg-white/25"
+        >
+          Открыть консоль alerting
+        </Link>
+        <p className="text-xs leading-relaxed text-white/55">
+          Для доступа к консоли добавьте в URL параметр{" "}
+          <code className="rounded bg-black/30 px-1 py-0.5 text-white/80">?secret=…</code> — значение
+          совпадает с переменной окружения <code className="rounded bg-black/30 px-1 py-0.5 text-white/80">DEBUG_SECRET</code>{" "}
+          (сам секрет на страницу не выводится).
+        </p>
       </section>
     </main>
   );
