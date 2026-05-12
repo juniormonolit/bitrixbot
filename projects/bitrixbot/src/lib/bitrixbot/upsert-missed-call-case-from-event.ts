@@ -5,6 +5,19 @@ import { isMissedInboundCallEvent } from "@/src/lib/bitrixbot/is-missed-inbound-
 import { lookupEmployeeByBitrixUserId } from "@/src/lib/bitrixbot/employee-lookup";
 import { prepareNotificationsForMissedCallCase } from "@/src/lib/bitrixbot/prepare-notifications-for-missed-call-case";
 
+const LOG = "[alerting:process-missed-calls]";
+
+function supabaseErr(
+  ctx: string,
+  err: { message: string; details?: string | null; hint?: string | null; code?: string | null }
+): never {
+  const parts = [err.message];
+  if (err.details) parts.push(`details=${err.details}`);
+  if (err.hint) parts.push(`hint=${err.hint}`);
+  if (err.code) parts.push(`code=${err.code}`);
+  throw new Error(`${ctx}: ${parts.join(" | ")}`);
+}
+
 type CallEventRow = {
   id: string;
   occurred_at: string;
@@ -51,7 +64,7 @@ async function getOrCreateProcessingRow(
     .select("id, processing_status, case_id, processing_attempts")
     .eq("call_event_id", callEvent.id)
     .maybeSingle();
-  if (selErr) throw new Error(selErr.message);
+  if (selErr) supabaseErr("call_event_case_processing.select(existing)", selErr);
   if (existing) return existing as ProcessingRow;
 
   const { data: inserted, error: insErr } = await supabase
@@ -63,7 +76,7 @@ async function getOrCreateProcessingRow(
     })
     .select("id, processing_status, case_id, processing_attempts")
     .single();
-  if (insErr) throw new Error(insErr.message);
+  if (insErr) supabaseErr("call_event_case_processing.insert", insErr);
   return inserted as ProcessingRow;
 }
 
@@ -79,7 +92,7 @@ async function markProcessing(
   }>
 ) {
   const { error } = await supabase.from("call_event_case_processing").update(patch).eq("id", rowId);
-  if (error) throw new Error(error.message);
+  if (error) supabaseErr("call_event_case_processing.update(mark)", error);
 }
 
 async function findExistingOpenCase(
@@ -111,18 +124,19 @@ async function findExistingOpenCase(
 
   if (input.dealId !== null) {
     const { data, error } = await withManager.eq("deal_id", input.dealId).maybeSingle();
-    if (error) throw new Error(error.message);
+    if (error) supabaseErr("missed_call_cases.select(deal_match)", error);
     if (data) return data as { id: string };
   }
 
   const { data: fallback, error: fbErr } = await withManager.maybeSingle();
-  if (fbErr) throw new Error(fbErr.message);
+  if (fbErr) supabaseErr("missed_call_cases.select(fallback)", fbErr);
   return fallback as { id: string } | null;
 }
 
 export async function upsertMissedCallCaseFromEvent(
   callEventId: string
 ): Promise<UpsertMissedCallCaseResult> {
+  console.log(`${LOG} upsertMissedCallCaseFromEvent enter`, { callEventId });
   const supabase = createServiceRoleClient();
   const warnings: string[] = [];
   let processingRowId: string | null = null;
@@ -135,7 +149,7 @@ export async function upsertMissedCallCaseFromEvent(
       )
       .eq("id", callEventId)
       .single();
-    if (callErr) throw new Error(callErr.message);
+    if (callErr) supabaseErr("call_events.select(by_id)", callErr);
 
     const ce = callEvent as CallEventRow;
     const processing = await getOrCreateProcessingRow(supabase, ce);
@@ -225,7 +239,7 @@ export async function upsertMissedCallCaseFromEvent(
         )
         .eq("id", caseId)
         .single();
-      if (curErr) throw new Error(curErr.message);
+      if (curErr) supabaseErr("missed_call_cases.select(current)", curErr);
 
       const current = cur as {
         missed_count: number;
@@ -258,7 +272,7 @@ export async function upsertMissedCallCaseFromEvent(
           }
         })
         .eq("id", caseId);
-      if (upd2Err) throw new Error(upd2Err.message);
+      if (upd2Err) supabaseErr("missed_call_cases.update(existing)", upd2Err);
       updatedCase = true;
     } else {
       const dealUrl = buildDealUrl(ctx.dealId);
@@ -285,7 +299,7 @@ export async function upsertMissedCallCaseFromEvent(
         })
         .select("id")
         .single();
-      if (insCaseErr) throw new Error(insCaseErr.message);
+      if (insCaseErr) supabaseErr("missed_call_cases.insert", insCaseErr);
       caseId = (insertedCase as { id: string }).id;
       createdCase = true;
     }
