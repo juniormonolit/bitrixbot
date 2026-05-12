@@ -6,6 +6,18 @@ type CallEventRow = {
   occurred_at: string;
 };
 
+const DEFAULT_LIMIT = 100;
+const MAX_EFFECTIVE_LIMIT = 500;
+/** Upper bound on newest rows read from call_events (not full-table scan). */
+const MAX_CANDIDATE_FETCH = 2000;
+
+function clampEffectiveLimit(limit: number | undefined): number {
+  const raw =
+    typeof limit === "number" && Number.isFinite(limit) ? Math.floor(limit) : DEFAULT_LIMIT;
+  if (raw < 1) return DEFAULT_LIMIT;
+  return Math.min(MAX_EFFECTIVE_LIMIT, raw);
+}
+
 export type ProcessNewMissedCallEventsSummary = {
   scannedEvents: number;
   processedEvents: number;
@@ -15,22 +27,41 @@ export type ProcessNewMissedCallEventsSummary = {
   updatedCases: number;
   createdDeliveries: number;
   warnings: string[];
+  /** Rows returned from the missed+inbound query (bounded batch). */
+  fetchedCandidateEvents: number;
+  /** Among fetched candidates, how many already have `call_event_case_processing`. */
+  alreadyProcessedCandidates: number;
+  /** Among fetched candidates, how many are not in processing yet (before applying work limit). */
+  unprocessedCandidates: number;
+  /** Limit after clamp [1, 500]; this many events are passed to `upsertMissedCallCaseFromEvent` at most. */
+  effectiveLimit: number;
 };
 
 export async function processNewMissedCallEvents(
-  limit: number = 100
+  limit: number = DEFAULT_LIMIT
 ): Promise<ProcessNewMissedCallEventsSummary> {
   const supabase = createServiceRoleClient();
   const warnings: string[] = [];
 
+  const effectiveLimit = clampEffectiveLimit(limit);
+  const candidateFetchSize = Math.min(
+    MAX_CANDIDATE_FETCH,
+    Math.max(effectiveLimit * 10, effectiveLimit)
+  );
+
   const { data: candidates, error: candErr } = await supabase
     .from("call_events")
     .select("id, occurred_at")
-    .order("occurred_at", { ascending: true })
-    .limit(limit * 2);
+    .eq("status", "missed")
+    .eq("call_direction", "inbound")
+    .order("occurred_at", { ascending: false })
+    .limit(candidateFetchSize);
+
   if (candErr) throw new Error(candErr.message);
 
   const rows = (candidates ?? []) as CallEventRow[];
+  const fetchedCandidateEvents = rows.length;
+
   if (rows.length === 0) {
     return {
       scannedEvents: 0,
@@ -40,7 +71,11 @@ export async function processNewMissedCallEvents(
       createdCases: 0,
       updatedCases: 0,
       createdDeliveries: 0,
-      warnings
+      warnings,
+      fetchedCandidateEvents: 0,
+      alreadyProcessedCandidates: 0,
+      unprocessedCandidates: 0,
+      effectiveLimit
     };
   }
 
@@ -51,8 +86,14 @@ export async function processNewMissedCallEvents(
     .in("call_event_id", ids);
   if (procErr) throw new Error(procErr.message);
 
-  const already = new Set<string>((processedRows ?? []).map((r) => (r as { call_event_id: string }).call_event_id));
-  const toProcess = rows.filter((r) => !already.has(r.id)).slice(0, limit);
+  const already = new Set<string>(
+    (processedRows ?? []).map((r) => (r as { call_event_id: string }).call_event_id)
+  );
+
+  const alreadyProcessedCandidates = rows.filter((r) => already.has(r.id)).length;
+  const unprocessedOrdered = rows.filter((r) => !already.has(r.id));
+  const unprocessedCandidates = unprocessedOrdered.length;
+  const toProcess = unprocessedOrdered.slice(0, effectiveLimit);
 
   let processedEvents = 0;
   let skippedEvents = 0;
@@ -86,7 +127,10 @@ export async function processNewMissedCallEvents(
     createdCases,
     updatedCases,
     createdDeliveries,
-    warnings
+    warnings,
+    fetchedCandidateEvents,
+    alreadyProcessedCandidates,
+    unprocessedCandidates,
+    effectiveLimit
   };
 }
-
