@@ -134,6 +134,30 @@ async function markProcessing(
   if (error) supabaseErr("call_event_case_processing.update(mark)", error);
 }
 
+/** Любой успешный звонок по тому же нормализованному номеру между двумя timestamp — обрывает серию пропусков. */
+async function hasSuccessfulCallSamePhoneBetween(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  phoneNormalized: string,
+  afterIso: string,
+  beforeIso: string
+): Promise<boolean> {
+  const t0 = new Date(afterIso).getTime();
+  const t1 = new Date(beforeIso).getTime();
+  if (!Number.isFinite(t0) || !Number.isFinite(t1) || t1 <= t0) return false;
+
+  const { data, error } = await supabase
+    .from("call_events")
+    .select("id")
+    .eq("status", "success")
+    .eq("phone_normalized", phoneNormalized)
+    .gt("occurred_at", afterIso)
+    .lt("occurred_at", beforeIso)
+    .limit(1)
+    .maybeSingle();
+  if (error) supabaseErr("call_events.select(success_between)", error);
+  return Boolean(data);
+}
+
 async function findExistingOpenCase(
   supabase: ReturnType<typeof createServiceRoleClient>,
   input: {
@@ -352,7 +376,7 @@ export async function upsertMissedCallCaseFromEvent(
       const { data: cur, error: curErr } = await supabase
         .from("missed_call_cases")
         .select(
-          "id, missed_count, manager_bitrix_user_id, manager_name, deal_id, deal_url, deal_title, deal_enriched_at, deal_enrichment_error, deal_enrichment_source, contact_name"
+          "id, missed_count, last_missed_at, manager_bitrix_user_id, manager_name, deal_id, deal_url, deal_title, deal_enriched_at, deal_enrichment_error, deal_enrichment_source, contact_name"
         )
         .eq("id", caseId)
         .single();
@@ -360,6 +384,7 @@ export async function upsertMissedCallCaseFromEvent(
 
       const current = cur as {
         missed_count: number;
+        last_missed_at: string;
         manager_bitrix_user_id: string | null;
         manager_name: string | null;
         deal_id: number | null;
@@ -389,8 +414,21 @@ export async function upsertMissedCallCaseFromEvent(
         current.deal_enrichment_source?.trim() ||
         null;
 
+      mark("missed_call_cases_streak_check", {
+        phone_normalized: phoneNorm,
+        last_missed_at: current.last_missed_at,
+        new_missed_at: ce.occurred_at
+      });
+      const streakBroken = await hasSuccessfulCallSamePhoneBetween(
+        supabase,
+        phoneNorm,
+        current.last_missed_at,
+        ce.occurred_at
+      );
+      const nextMissedCount = streakBroken ? 1 : (current.missed_count ?? 0) + 1;
+
       const updatePayload = {
-        missed_count: (current.missed_count ?? 0) + 1,
+        missed_count: nextMissedCount,
         last_missed_at: ce.occurred_at,
         manager_bitrix_user_id: current.manager_bitrix_user_id ?? ctx.managerBitrixUserId,
         manager_name: current.manager_name ?? employeeInfo.managerName,

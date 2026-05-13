@@ -3,7 +3,8 @@ import { withTimeout } from "@/src/lib/bitrixbot/async-timeout";
 import { getAlertingSettings } from "@/src/lib/bitrixbot/get-alerting-settings";
 import {
   maybeReenrichCaseBeforeSend,
-  refreshPendingDeliveryMessageDealLine
+  refreshPendingDeliveryMessageDealLine,
+  refreshPendingDeliveryMessagePhoneLine
 } from "@/src/lib/bitrixbot/re-enrich-case-deal";
 import { sendBitrixMessage } from "@/src/lib/bitrixbot/send-bitrix-message";
 
@@ -179,6 +180,23 @@ export async function processPendingDeliveries(
       }
     } catch {
       warnings.push(`delivery_deal_line_patch_failed:${d.id}`);
+    }
+
+    try {
+      const phonePatched = await refreshPendingDeliveryMessagePhoneLine(supabase, d.id, d.case_id);
+      if (phonePatched.updated) {
+        warnings.push(`delivery_phone_line_patched:${d.id}`);
+        const { data: dFresh2 } = await supabase
+          .from("notification_deliveries")
+          .select("message_text")
+          .eq("id", d.id)
+          .maybeSingle();
+        if (dFresh2 && typeof (dFresh2 as { message_text?: string }).message_text === "string") {
+          messageText = (dFresh2 as { message_text: string }).message_text;
+        }
+      }
+    } catch {
+      warnings.push(`delivery_phone_line_patch_failed:${d.id}`);
     }
 
     if (!d.recipient_bitrix_user_id && mode === "live") {

@@ -81,11 +81,12 @@ export function normalizeBitrixCallEvent(
     getString(auth.user_id) ??
     getString(auth.USER_ID);
 
-  const crmEntityType =
-    (getString(data.CRM_ENTITY_TYPE) ?? getString(data.crm_entity_type))?.toUpperCase() ??
-    null;
+  const crmEntityTypeStr =
+    (getString(data.CRM_ENTITY_TYPE) ?? getString(data.crm_entity_type))?.toUpperCase() ?? null;
+  const crmEntityTypeNum = getNumber(data.CRM_ENTITY_TYPE) ?? getNumber(data.crm_entity_type);
+  const isDealEntity = crmEntityTypeStr === "DEAL" || crmEntityTypeNum === 2;
   const crmEntityId = getString(data.CRM_ENTITY_ID) ?? getString(data.crm_entity_id);
-  const dealId = crmEntityType === "DEAL" ? crmEntityId : null;
+  const dealId = isDealEntity ? crmEntityId : null;
 
   const status = computeStatus(data);
   const durationSeconds = getNumber(data.CALL_DURATION);

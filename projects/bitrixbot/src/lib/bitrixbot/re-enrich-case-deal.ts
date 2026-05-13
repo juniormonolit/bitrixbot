@@ -7,6 +7,7 @@ import {
   dealUrlForMessageTemplate,
   type CallEventDealEnrichmentRow
 } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
+import { formatPhoneForDisplay } from "@/lib/bitrix/phone-normalize";
 import { loadCallEventsForCase, type CaseCallEventRow } from "@/src/lib/bitrixbot/case-call-events";
 
 const CASE_FIELDS =
@@ -308,6 +309,36 @@ export async function refreshPendingDeliveryMessageDealLine(
 
   let next = msg.replace(/Сделка:\s*Сделка:\s*не определена/gi, `Сделка: ${line}`);
   next = next.replace(/Сделка:\s*не определена/gi, `Сделка: ${line}`);
+  if (next === msg) return { updated: false };
+
+  const { error } = await supabase.from("notification_deliveries").update({ message_text: next }).eq("id", deliveryId);
+  if (error) return { updated: false };
+  return { updated: true };
+}
+
+/** Normalize ugly Телефон: line in pending delivery using case.phone_normalized. */
+export async function refreshPendingDeliveryMessagePhoneLine(
+  supabase: SupabaseClient,
+  deliveryId: string,
+  caseId: string
+): Promise<{ updated: boolean }> {
+  const { data: c } = await supabase
+    .from("missed_call_cases")
+    .select("phone_normalized")
+    .eq("id", caseId)
+    .maybeSingle();
+  const raw = (c as { phone_normalized?: string } | null)?.phone_normalized?.trim() ?? "";
+  if (!raw) return { updated: false };
+  const formatted = formatPhoneForDisplay(raw);
+  if (!formatted) return { updated: false };
+
+  const { data: d } = await supabase
+    .from("notification_deliveries")
+    .select("message_text")
+    .eq("id", deliveryId)
+    .maybeSingle();
+  const msg = d?.message_text ?? "";
+  const next = msg.replace(/^(\s*Телефон:\s*)(.+)$/m, (_match: string, p1: string) => `${p1}${formatted}`);
   if (next === msg) return { updated: false };
 
   const { error } = await supabase.from("notification_deliveries").update({ message_text: next }).eq("id", deliveryId);

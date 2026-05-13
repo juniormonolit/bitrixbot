@@ -45,7 +45,6 @@ export async function findCallbackForCase(caseId: string): Promise<FindCallbackR
   const baseQuery = supabase
     .from("call_events")
     .select("id, occurred_at, manager_bitrix_user_id")
-    .eq("call_direction", "outbound")
     .eq("status", "success")
     .eq("phone_normalized", c.phone_normalized)
     .gte("occurred_at", c.last_missed_at)

@@ -30,12 +30,34 @@ function getString(value: unknown): string | null {
   return null;
 }
 
+function getNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const v = value.trim();
+    if (!v) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/** Bitrix CRM: deal owner type id (same as lib/bitrix/call-normalize). */
+const OWNER_TYPE_DEAL = 2;
+
+function isDealCrmEntity(data: JsonObject): boolean {
+  const s = (getString(data.CRM_ENTITY_TYPE) ?? getString(data.crm_entity_type))?.toUpperCase() ?? "";
+  if (s === "DEAL") return true;
+  const n = getNumber(data.CRM_ENTITY_TYPE) ?? getNumber(data.crm_entity_type);
+  return n === OWNER_TYPE_DEAL;
+}
+
 function parseDealId(value: string | null): number | null {
   if (!value) return null;
   const v = value.trim();
-  if (!v) return null;
+  if (!/^\d{1,12}$/.test(v)) return null;
   const n = Number(v);
-  return Number.isFinite(n) ? Math.trunc(n) : null;
+  if (!Number.isSafeInteger(n)) return null;
+  return n;
 }
 
 export function extractCallContext(callEvent: CallEventRow): ExtractedCallContext {
@@ -46,15 +68,15 @@ export function extractCallContext(callEvent: CallEventRow): ExtractedCallContex
     contactName: null as string | null
   };
 
-  // Try to enrich from raw_payload without guessing unknown fields.
   const root = getObj(callEvent.raw_payload);
   const data = getObj(root.data ?? root.DATA);
 
-  const dealId =
-    fromColumns.dealId ??
-    parseDealId(getString(data.CRM_ENTITY_ID) ?? getString(data.crm_entity_id));
+  const dealIdFromPayload = isDealCrmEntity(data)
+    ? parseDealId(getString(data.CRM_ENTITY_ID) ?? getString(data.crm_entity_id))
+    : null;
 
-  // contact name is not known to be present yet; keep null unless explicitly found.
+  const dealId = fromColumns.dealId ?? dealIdFromPayload;
+
   const contactName =
     getString(data.CONTACT_NAME) ?? getString(data.contact_name) ?? fromColumns.contactName;
 
@@ -65,4 +87,3 @@ export function extractCallContext(callEvent: CallEventRow): ExtractedCallContex
     contactName
   };
 }
-

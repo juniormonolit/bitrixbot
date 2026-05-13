@@ -8,6 +8,7 @@ import {
   resolveAlertRecipients,
   type AlertRuleEvaluationContext
 } from "@/src/lib/bitrixbot/alert-notification-rule-engine";
+import { formatPhoneForDisplay } from "@/lib/bitrix/phone-normalize";
 import { dealUrlForMessageTemplate } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
 import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
 import { renderMessageTemplate } from "@/src/lib/bitrixbot/render-message-template";
@@ -280,7 +281,7 @@ export async function prepareNotificationsForMissedCallCase(
         deal_title: typedCase.deal_title?.trim() || "",
         deal_url: dealUrl,
         contact_name: typedCase.contact_name,
-        phone: typedCase.phone_normalized,
+        phone: formatPhoneForDisplay(typedCase.phone_normalized),
         missed_count: typedCase.missed_count,
         missed_at: typedCase.last_missed_at,
         case_id: typedCase.id,
