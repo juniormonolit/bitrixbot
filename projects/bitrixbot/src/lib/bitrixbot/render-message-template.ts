@@ -10,6 +10,9 @@ export type MessageTemplateValues = {
   missed_at?: string | null;
   case_id?: string | null;
   main_recipient?: string | null;
+  minutes_without_callback?: string | number | null;
+  recipient_role?: string | null;
+  recipient_name?: string | null;
 };
 
 function normalizeTemplateValue(value: unknown): string {
@@ -19,11 +22,19 @@ function normalizeTemplateValue(value: unknown): string {
   return "";
 }
 
+/** Turn stored `\n` escape sequences into real newlines before rendering. */
+export function normalizeTemplateNewlines(body: string | null | undefined): string {
+  if (!body) return "";
+  return body.replace(/\\n/g, "\n");
+}
+
 export function renderMessageTemplate(
   body: string | null | undefined,
   values: MessageTemplateValues
 ): string {
   if (!body) return "";
+
+  const normalizedBody = normalizeTemplateNewlines(body);
 
   const map: Record<string, string> = {
     message: normalizeTemplateValue(values.message),
@@ -36,10 +47,13 @@ export function renderMessageTemplate(
     missed_count: normalizeTemplateValue(values.missed_count),
     missed_at: normalizeTemplateValue(values.missed_at),
     case_id: normalizeTemplateValue(values.case_id),
-    main_recipient: normalizeTemplateValue(values.main_recipient)
+    main_recipient: normalizeTemplateValue(values.main_recipient),
+    minutes_without_callback: normalizeTemplateValue(values.minutes_without_callback),
+    recipient_role: normalizeTemplateValue(values.recipient_role),
+    recipient_name: normalizeTemplateValue(values.recipient_name)
   };
 
-  let rendered = body.replace(/\{\{([a-z_]+)\}\}/gi, (_, keyRaw: string) => {
+  let rendered = normalizedBody.replace(/\{\{([a-z_]+)\}\}/gi, (_, keyRaw: string) => {
     const key = keyRaw.toLowerCase();
     return map[key] ?? "";
   });
@@ -54,4 +68,3 @@ export function renderMessageTemplate(
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
-

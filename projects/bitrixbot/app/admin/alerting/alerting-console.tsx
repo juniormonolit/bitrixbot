@@ -10,7 +10,10 @@ import {
 } from "@/src/lib/bitrixbot/alerting-mode";
 import type { AlertingSettings } from "@/src/lib/bitrixbot/get-alerting-settings";
 import type { CallEventManagerDiagnostics } from "@/src/lib/bitrixbot/call-event-manager-diagnostics";
+import type { AlertNotificationRuleRow } from "@/src/lib/bitrixbot/alert-notification-rule-engine";
 import { ManualActions } from "./manual-actions";
+import { OrgHierarchyBrowser } from "./org-hierarchy-browser";
+import { NotificationRulesPanel } from "./notification-rules-panel";
 import {
   applyAlertingModeAction,
   resetMessageTemplateByCodeAction,
@@ -59,21 +62,25 @@ export type TemplatePanelRow = {
   target_role: string;
 };
 
+export type OrgHierarchyRow = import("./org-hierarchy-browser").OrgHierarchyRow;
+export type OrgHierarchyStats = import("./org-hierarchy-browser").OrgHierarchyStats;
+
+export type AlertRulesReadiness = {
+  enabledRulesCount: number;
+  hasResponsibleManagerRule: boolean;
+  tableMissing: boolean;
+};
+
 export type OrgStructureSnapshot = {
   employeeCount: number;
   hierarchyRowCount: number;
-  mappingRows: Array<{
-    id: string;
-    manager_bitrix_user_id: string;
-    manager_name: string | null;
-    rop_bitrix_user_id: string | null;
-    rop_name: string | null;
-    department_name: string | null;
-    resolved_at: string;
-  }>;
+  hierarchyRows: OrgHierarchyRow[];
+  hierarchyStats: OrgHierarchyStats;
 };
 
-type TabId = "mode" | "templates" | "logs" | "org";
+type TabId = "mode" | "rules" | "logs" | "org";
+
+const PENDING_DELIVERIES_WARN_THRESHOLD = 200;
 
 const SAMPLE_TEMPLATE_VALUES = {
   message: "СРОЧНО ПЕРЕЗВОНИ КЛИЕНТУ. ДО ТЕБЯ НЕ ДОЗВОНИЛИСЬ.",
@@ -86,6 +93,9 @@ const SAMPLE_TEMPLATE_VALUES = {
   case_id: "00000000-0000-4000-8000-000000000001",
   main_recipient: "Иван Иванов (manager)",
   missed_count: 2,
+  minutes_without_callback: "15",
+  recipient_role: "manager",
+  recipient_name: "Иван Иванов",
   contact_name: "ООО Ромашка"
 };
 
@@ -233,6 +243,8 @@ export function AlertingConsole(props: {
   templates: { manager: TemplatePanelRow | null; rop: TemplatePanelRow | null };
   orgSnapshot: OrgStructureSnapshot;
   managerCallDiagnostics: CallEventManagerDiagnostics;
+  alertRules: AlertNotificationRuleRow[];
+  alertRulesReadiness: AlertRulesReadiness;
 }) {
   const [tab, setTab] = useState<TabId>("mode");
   const mode = deriveAlertingMode(props.settings);
@@ -251,7 +263,7 @@ export function AlertingConsole(props: {
   }, []);
 
   const varsNote =
-    "Переменные в шаблоне: {message}, {manager_name}, {phone}, {deal_id}, {deal_url}, {deal_title}, {missed_count}, {missed_at}, {case_id}, {contact_name}, {main_recipient} — также поддерживаются дубли {{var}}.";
+    "Переменные: {message}, {manager_name}, {phone}, {deal_id}, {deal_title}, {deal_url}, {missed_at}, {case_id}, {contact_name}, {missed_count}, {minutes_without_callback}, {recipient_role}, {recipient_name}, {main_recipient} — также {{...}}. Переносы: в БД могут быть \\n; preview и отправка нормализуются в реальные переводы строк.";
 
   return (
     <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 px-6 py-10">
@@ -267,8 +279,8 @@ export function AlertingConsole(props: {
         <TabButton active={tab === "mode"} onClick={() => setTab("mode")}>
           Режим работы
         </TabButton>
-        <TabButton active={tab === "templates"} onClick={() => setTab("templates")}>
-          Шаблоны сообщений
+        <TabButton active={tab === "rules"} onClick={() => setTab("rules")}>
+          Правила уведомлений
         </TabButton>
         <TabButton active={tab === "logs"} onClick={() => setTab("logs")}>
           Логи
@@ -317,6 +329,84 @@ export function AlertingConsole(props: {
               <div className="text-2xl font-semibold">{props.summary.openSlaExecutions}</div>
             </Card>
           </div>
+
+          <Card title="Перед боевым режимом — чеклист">
+            <p className="mb-3 text-xs text-white/55">
+              Проверьте пункты перед включением боевого режима (сообщения реальным ответственным).
+            </p>
+            <ul className="space-y-2 text-sm text-white/80">
+              <li className="flex flex-wrap gap-2">
+                <span>{props.orgSnapshot.employeeCount > 0 ? "✓" : "○"}</span>
+                <span>
+                  employees sync: в таблице <code className="text-white/70">employees</code>{" "}
+                  {props.orgSnapshot.employeeCount > 0 ? (
+                    <span className="text-emerald-100/90">{props.orgSnapshot.employeeCount} записей</span>
+                  ) : (
+                    <span className="text-amber-100/90">нет строк — проверьте синхронизацию</span>
+                  )}
+                </span>
+              </li>
+              <li className="flex flex-wrap gap-2">
+                <span>{props.managerCallDiagnostics.missingFromEmployees === 0 ? "✓" : "○"}</span>
+                <span>
+                  manager ids в выборке:{" "}
+                  {props.managerCallDiagnostics.missingFromEmployees === 0 ? (
+                    <span className="text-emerald-100/90">все найдены в employees</span>
+                  ) : (
+                    <span className="text-amber-100/90">
+                      {props.managerCallDiagnostics.missingFromEmployees} id без employees — см. блок ниже на вкладке
+                      «Структура»
+                    </span>
+                  )}
+                </span>
+              </li>
+              <li className="flex flex-wrap gap-2">
+                <span>
+                  {!props.alertRulesReadiness.tableMissing && props.alertRulesReadiness.enabledRulesCount > 0
+                    ? "✓"
+                    : "○"}
+                </span>
+                <span>
+                  правила включены:{" "}
+                  {props.alertRulesReadiness.tableMissing ? (
+                    <span className="text-amber-100/90">таблица правил недоступна или пуста</span>
+                  ) : props.alertRulesReadiness.enabledRulesCount > 0 ? (
+                    <span className="text-emerald-100/90">
+                      активных правил: {props.alertRulesReadiness.enabledRulesCount}
+                    </span>
+                  ) : (
+                    <span className="text-amber-100/90">нет включённых правил</span>
+                  )}
+                </span>
+              </li>
+              <li className="flex flex-wrap gap-2">
+                <span>{props.alertRulesReadiness.hasResponsibleManagerRule ? "✓" : "○"}</span>
+                <span>
+                  есть активное правило с получателем «ответственный менеджер»:{" "}
+                  {props.alertRulesReadiness.hasResponsibleManagerRule ? (
+                    <span className="text-emerald-100/90">да</span>
+                  ) : (
+                    <span className="text-amber-100/90">нет — менеджер может не получать уведомления по правилам</span>
+                  )}
+                </span>
+              </li>
+              <li className="flex flex-wrap gap-2">
+                <span>{props.summary.pendingDeliveries < PENDING_DELIVERIES_WARN_THRESHOLD ? "✓" : "○"}</span>
+                <span>
+                  pending deliveries не слишком много:{" "}
+                  <span className={props.summary.pendingDeliveries < PENDING_DELIVERIES_WARN_THRESHOLD ? "text-emerald-100/90" : "text-amber-100/90"}>
+                    {props.summary.pendingDeliveries} (порог предупреждения {PENDING_DELIVERIES_WARN_THRESHOLD})
+                  </span>
+                </span>
+              </li>
+            </ul>
+            {!props.alertRulesReadiness.hasResponsibleManagerRule && !props.alertRulesReadiness.tableMissing ? (
+              <p className="mt-3 rounded-md border border-amber-500/35 bg-amber-500/10 p-2 text-xs text-amber-100">
+                Предупреждение: среди <strong>включённых</strong> правил нет ни одного с получателем «Ответственный
+                менеджер». Первый уровень эскалации может не дойти до менеджера.
+              </p>
+            ) : null}
+          </Card>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <Card title="Режим 1: Боевой">
@@ -431,35 +521,39 @@ export function AlertingConsole(props: {
         </div>
       ) : null}
 
-      {tab === "templates" ? (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <TemplateSection
-            title="Пропущенный входящий звонок"
-            description="Шаблон для роли manager в таблице message_templates."
-            template={props.templates.manager}
-            variablesNote={varsNote}
-          />
-          <TemplateSection
-            title="SLA / эскалация (РОП)"
-            description="Шаблон для роли rop при эскалации / повторных пропусках."
-            template={props.templates.rop}
-            variablesNote={varsNote}
-          />
-          <div className="lg:col-span-2">
-            <Card title="Mirror-дубль">
-              <p className="text-sm text-white/75">
-                Текст mirror-сообщения собирается в коде отправки (префикс «[Дубль уведомления]» + основной текст
-                delivery). Отдельного шаблона в БД пока нет — вынести в настройки можно позже.
-              </p>
-              <p className="mt-2 text-[11px] text-amber-100/85">
-                {/* TODO: вынести buildMirrorMessage в конфиг/БД рядом с alerting_settings */}
-                TODO: подключить сохранение шаблона mirror рядом с process-pending-deliveries (buildMirrorMessage).
-              </p>
-              <div className="mt-3 text-xs text-white/50">Preview (структура как в коде)</div>
-              <div className="mt-1 max-w-full overflow-hidden rounded-md border border-white/10 bg-black/30 p-3 text-xs text-white/80 [overflow-wrap:anywhere] whitespace-pre-line">
-                {mirrorPreview}
-              </div>
-            </Card>
+      {tab === "rules" ? (
+        <div className="flex flex-col gap-6">
+          <NotificationRulesPanel rules={props.alertRules} />
+          <div className="text-xs text-white/45">
+            Наследие: шаблоны <code className="text-white/65">message_templates</code> (роли manager/rop) могут
+            использоваться другими путями; правила missed-call читаются из{" "}
+            <code className="text-white/65">alert_notification_rules</code>.
+          </div>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <TemplateSection
+              title="[Legacy] Пропущенный — message_templates (manager)"
+              description="Запись в message_templates для роли manager; не заменяет правила выше."
+              template={props.templates.manager}
+              variablesNote={varsNote}
+            />
+            <TemplateSection
+              title="[Legacy] SLA / эскалация — message_templates (rop)"
+              description="Запись для роли rop; не заменяет правила выше."
+              template={props.templates.rop}
+              variablesNote={varsNote}
+            />
+            <div className="lg:col-span-2">
+              <Card title="Mirror-дубль">
+                <p className="text-sm text-white/75">
+                  Текст mirror-сообщения собирается в коде отправки (префикс «[Дубль уведомления]» + основной текст
+                  delivery).
+                </p>
+                <div className="mt-3 text-xs text-white/50">Preview (структура как в коде)</div>
+                <div className="mt-1 max-w-full overflow-hidden rounded-md border border-white/10 bg-black/30 p-3 text-xs text-white/80 [overflow-wrap:anywhere] whitespace-pre-line">
+                  {mirrorPreview}
+                </div>
+              </Card>
+            </div>
           </div>
         </div>
       ) : null}
@@ -608,6 +702,8 @@ export function AlertingConsole(props: {
             </Card>
           </div>
 
+          <OrgHierarchyBrowser rows={props.orgSnapshot.hierarchyRows} stats={props.orgSnapshot.hierarchyStats} />
+
           <Card title="Проверка manager Bitrix user ids (последние missed inbound)">
             <p className="mb-3 text-xs text-white/55">
               Сравнение <code className="text-white/75">call_events.manager_bitrix_user_id</code> с таблицами{" "}
@@ -640,7 +736,7 @@ export function AlertingConsole(props: {
             <p className="mb-2 text-[11px] text-white/45">
               Точечная проверка:{" "}
               <code className="break-all text-white/70">
-                /api/debug/alerting/org-lookup?secret=…&amp;bitrixUserId=1933
+                /api/debug/alerting/org-lookup?secret=…&bitrixUserId=1933
               </code>
             </p>
             {props.managerCallDiagnostics.missingManagers.length === 0 ? (
@@ -709,42 +805,6 @@ export function AlertingConsole(props: {
                 Сохранить расписание
               </button>
             </form>
-          </Card>
-
-          <Card title="Менеджер → руководители (фрагмент кэша)">
-            <p className="mb-2 text-xs text-white/50">
-              Диагностика <code className="text-white/75">employee_not_found</code>: см. блок выше и ответ «Обработать
-              новые missed calls» (<code className="text-white/75">summary.employeeNotFound</code>).
-            </p>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="text-white/60">
-                  <tr>
-                    <th className="py-2">manager (Bitrix id)</th>
-                    <th className="py-2">имя</th>
-                    <th className="py-2">департамент</th>
-                    <th className="py-2">РОП</th>
-                    <th className="py-2">resolved_at</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {props.orgSnapshot.mappingRows.map((r) => (
-                    <tr key={r.id} className="border-t border-white/10">
-                      <td className="py-2 font-mono">{r.manager_bitrix_user_id}</td>
-                      <td className="py-2">{r.manager_name ?? "—"}</td>
-                      <td className="py-2">{r.department_name ?? "—"}</td>
-                      <td className="max-w-[12rem] py-2 [overflow-wrap:anywhere]">
-                        {r.rop_name ?? "—"}{" "}
-                        {r.rop_bitrix_user_id ? (
-                          <span className="text-white/45">({r.rop_bitrix_user_id})</span>
-                        ) : null}
-                      </td>
-                      <td className="py-2 whitespace-nowrap text-[10px] text-white/55">{r.resolved_at}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
           </Card>
 
           <Card title="Обновить вручную">

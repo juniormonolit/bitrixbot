@@ -1,28 +1,25 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { withTimeout } from "@/src/lib/bitrixbot/async-timeout";
+import {
+  AlertNotificationRuleRow,
+  defaultMessageLineForRecipientRole,
+  evaluateAlertRuleCondition,
+  parseAlertRecipientSpecs,
+  resolveAlertRecipients,
+  type AlertRuleEvaluationContext
+} from "@/src/lib/bitrixbot/alert-notification-rule-engine";
 import { buildDealUrl } from "@/src/lib/bitrixbot/build-deal-url";
 import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
-import { parseRecipientRoles, RecipientRole } from "@/src/lib/bitrixbot/recipient-roles";
 import { renderMessageTemplate } from "@/src/lib/bitrixbot/render-message-template";
-import {
-  NotificationRuleContext,
-  NotificationRuleRow,
-  selectNotificationRule
-} from "@/src/lib/bitrixbot/select-notification-rule";
 
 const LOG = "[alerting:prepare-notifications]";
 const DB_OP_MS = 2_500;
-/** Inserts can be slower under load; keep other reads at DB_OP_MS. */
 const DELIVERY_INSERT_TIMEOUT_MS = 6_000;
-const RULES_LIMIT = 300;
+const RULES_PAGE = 500;
 
 export type PrepareNotificationsDiag = { lastStage: string };
 
 export type PrepareNotificationsOptions = {
-  /**
-   * Сотрудник не найден в employees — для роли manager используем call_event / case manager_bitrix_user_id
-   * и отображаемое имя `manager (id)` + recipient_source.
-   */
   treatManagerAsEmployeeFallback?: boolean;
 };
 
@@ -51,35 +48,21 @@ type ResolvedHierarchyRow = {
   company_director_name: string | null;
 };
 
-type TemplateRow = {
-  id: string;
-  body: string;
-  target_role: string | null;
-};
-
 type DeliveryStatus = "pending" | "sent" | "failed" | "skipped";
 
 export type PrepareNotificationsResult = {
   caseId: string;
+  /** Last alert rule id that matched conditions in this run (by sort_order). */
   selectedRuleId: string | null;
   createdDeliveriesCount: number;
-  skippedRecipients: { role: RecipientRole; reason: string }[];
+  skippedRecipients: { role: string; reason: string }[];
   warnings: string[];
-  /** Создан delivery на manager по bitrix id из кейса (fallback при отсутствии employees). */
   managerRecipientFallbackUsed: boolean;
 };
 
 function mark(diag: PrepareNotificationsDiag | null | undefined, stage: string, meta?: Record<string, unknown>) {
   if (diag) diag.lastStage = stage;
   console.log(`${LOG} stage`, { stage, ...meta });
-}
-
-function roleMessage(role: RecipientRole): string {
-  if (role === "manager") return "СРОЧНО ПЕРЕЗВОНИ КЛИЕНТУ. ДО ТЕБЯ НЕ ДОЗВОНИЛИСЬ.";
-  if (role === "rop") return "КЛИЕНТ НЕ ДОЗВОНИЛСЯ ДО МЕНЕДЖЕРА.";
-  if (role === "department_director")
-    return "ЭСКАЛАЦИЯ: ЕСТЬ ПОВТОРНЫЕ ПРОПУЩЕННЫЕ ЗВОНКИ.";
-  return "ЭСКАЛАЦИЯ НА УРОВЕНЬ КОМПАНИИ: КЛИЕНТ НЕ МОЖЕТ ДОЗВОНИТЬСЯ.";
 }
 
 function minutesBetween(now: Date, iso: string): number | null {
@@ -107,23 +90,14 @@ function hasCallbackAfterMissed(caseRow: MissedCallCaseRow): boolean {
 
 async function alreadyDeliveredOrPending(
   supabase: ReturnType<typeof createServiceRoleClient>,
-  input: {
-    case_id: string;
-    rule_id: string | null;
-    recipient_role: RecipientRole;
-    recipient_bitrix_user_id: string | null;
-  }
+  input: { case_id: string; alert_rule_id: string; recipient_bitrix_user_id: string }
 ): Promise<boolean> {
-  if (!input.rule_id) return false;
-  if (!input.recipient_bitrix_user_id) return false;
-
   const { data, error } = await withTimeout(
     supabase
       .from("notification_deliveries")
       .select("id, delivery_status")
       .eq("case_id", input.case_id)
-      .eq("rule_id", input.rule_id)
-      .eq("recipient_role", input.recipient_role)
+      .eq("alert_rule_id", input.alert_rule_id)
       .eq("recipient_bitrix_user_id", input.recipient_bitrix_user_id)
       .in("delivery_status", ["pending", "sent"])
       .limit(1),
@@ -134,6 +108,33 @@ async function alreadyDeliveredOrPending(
   return Boolean(data && data.length > 0);
 }
 
+async function loadAlertNotificationRules(
+  supabase: ReturnType<typeof createServiceRoleClient>
+): Promise<AlertNotificationRuleRow[]> {
+  const all: AlertNotificationRuleRow[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await withTimeout(
+      supabase
+        .from("alert_notification_rules")
+        .select(
+          "id, name, enabled, sort_order, missed_count_threshold, no_callback_minutes, condition_operator, recipients, message_template"
+        )
+        .eq("enabled", true)
+        .order("sort_order", { ascending: true })
+        .range(from, from + RULES_PAGE - 1),
+      DB_OP_MS,
+      "alert_notification_rules.select"
+    );
+    if (error) throw new Error(error.message);
+    const chunk = (data ?? []) as AlertNotificationRuleRow[];
+    all.push(...chunk);
+    if (chunk.length < RULES_PAGE) break;
+    from += RULES_PAGE;
+  }
+  return all;
+}
+
 export async function prepareNotificationsForMissedCallCase(
   caseId: string,
   diag?: PrepareNotificationsDiag | null,
@@ -141,7 +142,7 @@ export async function prepareNotificationsForMissedCallCase(
 ): Promise<PrepareNotificationsResult> {
   const supabase = createServiceRoleClient();
   const warnings: string[] = [];
-  const skippedRecipients: { role: RecipientRole; reason: string }[] = [];
+  const skippedRecipients: { role: string; reason: string }[] = [];
   let managerRecipientFallbackUsed = false;
   const treatFb = Boolean(options?.treatManagerAsEmployeeFallback);
 
@@ -196,209 +197,151 @@ export async function prepareNotificationsForMissedCallCase(
   mark(diag, "prepare_notifications_lookup_employee_done", { hasHierarchy: Boolean(typedHierarchy) });
 
   mark(diag, "prepare_notifications_rules_load_start", { caseId });
-  const { data: rules, error: rulesErr } = await withTimeout(
-    supabase
-      .from("notification_rules")
-      .select(
-        "id, is_active, sort_order, trigger_type, missed_count_from, missed_count_to, delay_minutes, recipient_roles, stop_processing"
-      )
-      .eq("is_active", true)
-      .order("sort_order", { ascending: true })
-      .limit(RULES_LIMIT),
-    DB_OP_MS,
-    "notification_rules.select"
-  );
-  mark(diag, "prepare_notifications_rules_load_done", { count: rules?.length ?? 0 });
-  if (rulesErr) throw new Error(rulesErr.message);
+  const rules = await loadAlertNotificationRules(supabase);
+  mark(diag, "prepare_notifications_rules_load_done", { count: rules.length });
+
+  if (rules.length === 0) {
+    warnings.push("no_alert_notification_rules");
+    return {
+      caseId: typedCase.id,
+      selectedRuleId: null,
+      createdDeliveriesCount: 0,
+      skippedRecipients,
+      warnings,
+      managerRecipientFallbackUsed: false
+    };
+  }
 
   const now = new Date();
-  const context: NotificationRuleContext = {
+  const ctx: AlertRuleEvaluationContext = {
     missedCount: typedCase.missed_count,
     minutesSinceLastMissed: minutesBetween(now, typedCase.last_missed_at),
     hasCallbackAfterMissed: hasCallbackAfterMissed(typedCase)
   };
 
   mark(diag, "prepare_notifications_resolve_recipients_start", { missedCount: typedCase.missed_count });
-  const selected = selectNotificationRule((rules ?? []) as NotificationRuleRow[], context);
-  if (!selected) {
-    mark(diag, "prepare_notifications_resolve_recipients_done", { selectedRuleId: null });
-    return {
-      caseId,
-      selectedRuleId: null,
-      createdDeliveriesCount: 0,
-      skippedRecipients,
-      warnings,
-      managerRecipientFallbackUsed
-    };
-  }
 
-  const roles = parseRecipientRoles(selected.recipient_roles);
-  if (roles.length === 0) {
-    warnings.push("rule_has_no_recipient_roles");
-    mark(diag, "prepare_notifications_resolve_recipients_done", { selectedRuleId: selected.id, roles: 0 });
-    return {
-      caseId,
-      selectedRuleId: selected.id,
-      createdDeliveriesCount: 0,
-      skippedRecipients,
-      warnings,
-      managerRecipientFallbackUsed
-    };
-  }
-
-  const rolesUnique = [...new Set(roles)];
-  mark(diag, "prepare_notifications_templates_prefetch_start", { roles: rolesUnique });
-  const { data: templateRows, error: tplErr } = await withTimeout(
-    supabase
-      .from("message_templates")
-      .select("id, body, target_role")
-      .eq("is_active", true)
-      .eq("channel", "bitrix_chat")
-      .in("target_role", rolesUnique),
-    DB_OP_MS,
-    "message_templates.in_roles"
-  );
-  if (tplErr) throw new Error(tplErr.message);
-  const templateByRole = new Map<RecipientRole, TemplateRow>();
-  for (const row of (templateRows ?? []) as TemplateRow[]) {
-    const tr = row.target_role as RecipientRole | null;
-    if (tr && rolesUnique.includes(tr)) templateByRole.set(tr, row);
-  }
-  mark(diag, "prepare_notifications_templates_prefetch_done", { loaded: templateByRole.size });
-
-  const recipients: Array<{
-    role: RecipientRole;
-    bitrix_user_id: string | null;
-    name: string | null;
-    recipient_source: string | null;
-  }> = roles.map((role) => {
-    if (role === "manager") {
-      const uid = normalizeBitrixUserId(typedCase.manager_bitrix_user_id);
-      const rawName = typedCase.manager_name?.trim() || null;
-      let name = rawName;
-      let recipient_source: string | null = null;
-      if (uid && treatFb) {
-        name = rawName ?? `manager (${uid})`;
-        recipient_source = "call_event_manager_bitrix_user_id_fallback";
-      }
-      return { role, bitrix_user_id: uid, name, recipient_source };
-    }
-    if (role === "rop") {
-      return {
-        role,
-        bitrix_user_id: typedHierarchy?.rop_bitrix_user_id ?? null,
-        name: typedHierarchy?.rop_name ?? null,
-        recipient_source: null
-      };
-    }
-    if (role === "department_director") {
-      return {
-        role,
-        bitrix_user_id: typedHierarchy?.department_director_bitrix_user_id ?? null,
-        name: typedHierarchy?.department_director_name ?? null,
-        recipient_source: null
-      };
-    }
-    return {
-      role,
-      bitrix_user_id: typedHierarchy?.company_director_bitrix_user_id ?? null,
-      name: typedHierarchy?.company_director_name ?? null,
-      recipient_source: null
-    };
-  });
-
-  mark(diag, "prepare_notifications_resolve_recipients_done", {
-    selectedRuleId: selected.id,
-    recipientCount: recipients.length
-  });
+  const dealUrl = typedCase.deal_url?.trim() ? typedCase.deal_url : buildDealUrl(typedCase.deal_id);
+  const managerUid = normalizeBitrixUserId(typedCase.manager_bitrix_user_id);
 
   let created = 0;
+  let lastMatchedRuleId: string | null = null;
+
   mark(diag, "prepare_notifications_insert_deliveries_start", { caseId });
 
-  for (const r of recipients) {
-    if (!r.bitrix_user_id) {
-      skippedRecipients.push({ role: r.role, reason: "recipient_user_missing" });
-      continue;
-    }
+  for (const rule of rules) {
+    if (!evaluateAlertRuleCondition(rule, ctx)) continue;
+    lastMatchedRuleId = rule.id;
 
-    const template = templateByRole.get(r.role);
-    if (!template) {
-      skippedRecipients.push({ role: r.role, reason: "template_missing" });
-      continue;
-    }
-
-    const dealUrl = typedCase.deal_url?.trim() ? typedCase.deal_url : buildDealUrl(typedCase.deal_id);
-
-    const displayManagerName =
-      r.role === "manager" && treatFb && !typedCase.manager_name?.trim()
-        ? `manager (${r.bitrix_user_id})`
-        : typedCase.manager_name;
-
-    const messageText = renderMessageTemplate(template.body, {
-      message: roleMessage(r.role),
-      manager_name: displayManagerName,
-      deal_id: typedCase.deal_id,
-      deal_url: dealUrl,
-      contact_name: typedCase.contact_name,
-      phone: typedCase.phone_normalized,
-      missed_count: typedCase.missed_count
-    });
-
-    const isDup = await alreadyDeliveredOrPending(supabase, {
-      case_id: typedCase.id,
-      rule_id: selected.id,
-      recipient_role: r.role,
-      recipient_bitrix_user_id: r.bitrix_user_id
-    });
-
-    if (isDup) {
-      skippedRecipients.push({ role: r.role, reason: "duplicate_delivery" });
-      continue;
-    }
-
-    const insertRow: Record<string, unknown> = {
-      case_id: typedCase.id,
-      rule_id: selected.id,
-      template_id: template.id,
-      recipient_role: r.role,
-      recipient_bitrix_user_id: r.bitrix_user_id,
-      recipient_name: r.name,
-      message_text: messageText,
-      delivery_status: "pending" as DeliveryStatus,
-      provider_name: "bitrix_bot"
-    };
-    if (r.recipient_source) {
-      insertRow.recipient_source = r.recipient_source;
-    }
-
-    const { error: insErr } = await withTimeout(
-      supabase.from("notification_deliveries").insert(insertRow as never),
-      DELIVERY_INSERT_TIMEOUT_MS,
-      `notification_deliveries.insert:${r.role}`
+    const specs = parseAlertRecipientSpecs(rule.recipients);
+    const recipients = resolveAlertRecipients(
+      specs,
+      {
+        managerBitrixUserId: managerUid,
+        managerName: typedCase.manager_name,
+        treatManagerFallback: treatFb,
+        hierarchy: typedHierarchy
+      },
+      (msg) => warnings.push(`${msg}:rule=${rule.id}:${rule.name}`)
     );
-    if (insErr) throw new Error(insErr.message);
 
-    created++;
-    if (r.recipient_source === "call_event_manager_bitrix_user_id_fallback") {
-      managerRecipientFallbackUsed = true;
+    for (const r of recipients) {
+      if (!r.bitrix_user_id) {
+        skippedRecipients.push({ role: r.recipient_role, reason: "recipient_user_missing" });
+        continue;
+      }
+
+      const isDup = await alreadyDeliveredOrPending(supabase, {
+        case_id: typedCase.id,
+        alert_rule_id: rule.id,
+        recipient_bitrix_user_id: r.bitrix_user_id
+      });
+
+      if (isDup) {
+        skippedRecipients.push({ role: r.recipient_role, reason: "duplicate_delivery" });
+        continue;
+      }
+
+      const displayManagerName =
+        r.recipient_role === "manager" && treatFb && !typedCase.manager_name?.trim()
+          ? `manager (${r.bitrix_user_id})`
+          : typedCase.manager_name;
+
+      const minutesWithout =
+        ctx.hasCallbackAfterMissed || ctx.minutesSinceLastMissed === null
+          ? "0"
+          : String(ctx.minutesSinceLastMissed);
+
+      const messageText = renderMessageTemplate(rule.message_template, {
+        message: defaultMessageLineForRecipientRole(r.recipient_role),
+        manager_name: displayManagerName,
+        deal_id: typedCase.deal_id,
+        deal_title: "",
+        deal_url: dealUrl,
+        contact_name: typedCase.contact_name,
+        phone: typedCase.phone_normalized,
+        missed_count: typedCase.missed_count,
+        missed_at: typedCase.last_missed_at,
+        case_id: typedCase.id,
+        minutes_without_callback: minutesWithout,
+        recipient_role: r.recipient_role,
+        recipient_name: r.name ?? ""
+      });
+
+      const insertRow: Record<string, unknown> = {
+        case_id: typedCase.id,
+        rule_id: null,
+        template_id: null,
+        alert_rule_id: rule.id,
+        recipient_role: r.recipient_role,
+        recipient_bitrix_user_id: r.bitrix_user_id,
+        recipient_name: r.name,
+        message_text: messageText,
+        delivery_status: "pending" as DeliveryStatus,
+        provider_name: "bitrix_bot"
+      };
+      if (r.recipient_source) {
+        insertRow.recipient_source = r.recipient_source;
+      }
+
+      const { error: insErr } = await withTimeout(
+        supabase.from("notification_deliveries").insert(insertRow as never),
+        DELIVERY_INSERT_TIMEOUT_MS,
+        `notification_deliveries.insert:${r.recipient_role}`
+      );
+      if (insErr) throw new Error(insErr.message);
+
+      created++;
+      if (r.recipient_source === "call_event_manager_bitrix_user_id_fallback") {
+        managerRecipientFallbackUsed = true;
+      }
     }
   }
 
+  mark(diag, "prepare_notifications_resolve_recipients_done", {
+    selectedRuleId: lastMatchedRuleId,
+    recipientLoops: created
+  });
   mark(diag, "prepare_notifications_insert_deliveries_done", { created });
 
-  const { error: updErr } = await withTimeout(
-    supabase
-      .from("missed_call_cases")
-      .update({ last_triggered_rule_id: selected.id, last_triggered_at: now.toISOString() })
-      .eq("id", typedCase.id),
-    DB_OP_MS,
-    "missed_call_cases.update_triggered"
-  );
-  if (updErr) throw new Error(updErr.message);
+  if (lastMatchedRuleId) {
+    const { error: updErr } = await withTimeout(
+      supabase
+        .from("missed_call_cases")
+        .update({
+          last_triggered_alert_rule_id: lastMatchedRuleId,
+          last_triggered_at: now.toISOString()
+        })
+        .eq("id", typedCase.id),
+      DB_OP_MS,
+      "missed_call_cases.update_triggered"
+    );
+    if (updErr) throw new Error(updErr.message);
+  }
 
   return {
     caseId: typedCase.id,
-    selectedRuleId: selected.id,
+    selectedRuleId: lastMatchedRuleId,
     createdDeliveriesCount: created,
     skippedRecipients,
     warnings,
