@@ -7,14 +7,27 @@ export type ManualActionKey =
   | "run_full_cycle"
   | "process_missed_calls"
   | "process_pending_deliveries"
-  | "sync_org_full";
+  | "sync_org_full"
+  | "sync_departments"
+  | "sync_employees"
+  | "rebuild_hierarchy";
 
 const ROUTES: Record<ManualActionKey, string> = {
   run_full_cycle: "/api/internal/alerting/run-full-cycle",
   process_missed_calls: "/api/debug/alerting/process-missed-calls",
   process_pending_deliveries: "/api/debug/alerting/process-pending-deliveries",
-  sync_org_full: "/api/debug/alerting/sync-org-full"
+  sync_org_full: "/api/debug/alerting/sync-org-full",
+  sync_departments: "/api/debug/alerting/sync-departments",
+  sync_employees: "/api/debug/alerting/sync-employees",
+  rebuild_hierarchy: "/api/debug/alerting/rebuild-hierarchy"
 };
+
+const LONG_SYNC_ACTIONS: ManualActionKey[] = [
+  "sync_org_full",
+  "sync_departments",
+  "sync_employees",
+  "rebuild_hierarchy"
+];
 
 function errMessageFromJson(json: unknown, status: number): string {
   if (json && typeof json === "object" && json !== null) {
@@ -113,11 +126,12 @@ export function ManualActions({ debugSecret }: { debugSecret: string }) {
       setLastResult(null);
 
       const controller = new AbortController();
-      const timeoutId = window.setTimeout(() => controller.abort(), 60000);
+      const clientTimeoutMs = LONG_SYNC_ACTIONS.includes(actionKey) ? 130_000 : 60_000;
+      const timeoutId = window.setTimeout(() => controller.abort(), clientTimeoutMs);
 
       try {
         const bodyPayload =
-          actionKey === "sync_org_full" ? {} : { limit };
+          LONG_SYNC_ACTIONS.includes(actionKey) ? {} : { limit };
         const res = await fetch(url, {
           method: "POST",
           headers: {
@@ -137,7 +151,7 @@ export function ManualActions({ debugSecret }: { debugSecret: string }) {
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
           setLastError(
-            "Запрос превысил лимит ожидания 60 секунд. Проверьте логи сервера и состояние Bitrix."
+            `Запрос превысил лимит ожидания ${clientTimeoutMs / 1000} с. Проверьте логи сервера и состояние Bitrix.`
           );
         } else {
           setLastError(error instanceof Error ? error.message : String(error));
@@ -164,6 +178,9 @@ export function ManualActions({ debugSecret }: { debugSecret: string }) {
             <option value="process_missed_calls">Обработать новые missed calls</option>
             <option value="process_pending_deliveries">Отправить pending deliveries</option>
             <option value="sync_org_full">Обновить структуру компании (Bitrix → БД → иерархия)</option>
+            <option value="sync_departments">Только: синхрон отделов из Bitrix</option>
+            <option value="sync_employees">Только: синхрон сотрудников из Bitrix</option>
+            <option value="rebuild_hierarchy">Только: пересборка org_resolved_hierarchy</option>
           </select>
         </div>
         <div className="w-40">

@@ -25,7 +25,7 @@ function tryParseJson(value: string): unknown {
 
 function redactSecrets(input: unknown): unknown {
   const shouldRedactKey = (k: string) =>
-    /token|secret|key|password|refresh|access/i.test(k);
+    /token|secret|key|password|refresh|access|application_token/i.test(k);
 
   if (Array.isArray(input)) return input.map(redactSecrets);
   if (!input || typeof input !== "object") return input;
@@ -37,6 +37,53 @@ function redactSecrets(input: unknown): unknown {
     else out[k] = redactSecrets(v);
   }
   return out;
+}
+
+/** Полные data/auth — только при BITRIX_WEBHOOK_VERBOSE_LOGS=1. */
+const VERBOSE_WEBHOOK_LOG =
+  typeof process.env.BITRIX_WEBHOOK_VERBOSE_LOGS === "string" &&
+  ["1", "true", "yes"].includes(process.env.BITRIX_WEBHOOK_VERBOSE_LOGS.toLowerCase());
+
+function pickStr(v: unknown): string | undefined {
+  if (v === null || v === undefined) return undefined;
+  const s = String(v).trim();
+  return s.length ? s : undefined;
+}
+
+function summarizeWebhookForLog(
+  event: string | null,
+  category: string,
+  payloadObj: JsonObject
+): Record<string, unknown> {
+  const data = (payloadObj.data ?? payloadObj.DATA) as unknown;
+  const d = toJsonObject(data);
+  const base: Record<string, unknown> = {
+    event: event ?? "",
+    category
+  };
+
+  if (category === "call") {
+    return {
+      ...base,
+      call_id: pickStr(d.CALL_ID) ?? pickStr(d.CALL_APP_ID) ?? pickStr(d.ID),
+      crm_activity_id: pickStr(d.CRM_ACTIVITY_ID),
+      portal_user_id: pickStr(d.PORTAL_USER_ID) ?? pickStr(d.USER_ID)
+    };
+  }
+
+  if (event === "ONCRMDEALADD" || event === "ONCRMDEALUPDATE") {
+    const fields = d.FIELDS;
+    const fObj = fields && typeof fields === "object" && !Array.isArray(fields) ? (fields as JsonObject) : {};
+    return {
+      ...base,
+      deal_id: pickStr(fObj.ID) ?? pickStr(d.ID)
+    };
+  }
+
+  return {
+    ...base,
+    data_top_keys: Object.keys(d).slice(0, 16)
+  };
 }
 
 async function readBody(req: Request): Promise<Record<string, unknown>> {
@@ -178,14 +225,22 @@ export async function POST(req: Request) {
 
     const routing = routeBitrixWebhook(payload);
 
-    console.log("[bitrix-bot-handler] received", {
-      event: event ?? "",
-      category: routing.category,
-      hasEventToken: Boolean(eventToken),
-      dedupeKeyPrefix: dedupeKey.split(":")[0],
-      data: redactSecrets(data),
-      auth: redactSecrets(auth)
-    });
+    if (VERBOSE_WEBHOOK_LOG) {
+      console.log("[bitrix-bot-handler] received", {
+        event: event ?? "",
+        category: routing.category,
+        hasEventToken: Boolean(eventToken),
+        dedupeKeyPrefix: dedupeKey.split(":")[0],
+        data: redactSecrets(data),
+        auth: redactSecrets(auth)
+      });
+    } else {
+      console.log("[bitrix-bot-handler] received", {
+        hasEventToken: Boolean(eventToken),
+        dedupeKeyPrefix: dedupeKey.split(":")[0],
+        ...summarizeWebhookForLog(event, routing.category, obj)
+      });
+    }
 
     const supabase = supabaseServiceRoleForRoute();
     const { data: inserted, error } = await supabase

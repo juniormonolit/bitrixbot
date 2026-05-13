@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { rebuildOrgResolvedHierarchy } from "@/src/lib/bitrixbot/resolve-org-hierarchy";
+import { syncDepartments } from "@/lib/bitrix/org";
 import { isAlertingDebugRequestAuthorized } from "@/src/lib/bitrixbot/debug-request-secret";
 
-const LOG = "[sync-org-debug] rebuild-hierarchy";
-const TIMEOUT_MS = 120_000;
+const LOG = "[sync-org-debug] sync-departments";
+const TIMEOUT_MS = 60_000;
 
 export async function POST(req: Request) {
   if (!isAlertingDebugRequestAuthorized(req)) {
@@ -15,14 +15,14 @@ export async function POST(req: Request) {
 
   try {
     const outcome = await Promise.race([
-      rebuildOrgResolvedHierarchy().then((result) => ({ type: "done" as const, result })),
+      syncDepartments().then((result) => ({ type: "done" as const, result })),
       new Promise<{ type: "timeout" }>((resolve) => setTimeout(() => resolve({ type: "timeout" }), TIMEOUT_MS))
     ]);
 
     if (outcome.type === "timeout") {
       console.error(`${LOG} error message=timeout`);
       return NextResponse.json(
-        { ok: false, error: "rebuild_hierarchy_timeout", timeoutMs: TIMEOUT_MS, lastStage: "rebuild_hierarchy" },
+        { ok: false, error: "sync_departments_timeout", timeoutMs: TIMEOUT_MS, lastStage: "sync_departments" },
         { status: 504 }
       );
     }

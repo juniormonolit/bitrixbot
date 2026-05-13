@@ -45,8 +45,113 @@ const USER_GET_SELECT = [
   "USER_TYPE"
 ] as const;
 
-/** Bitrix list API page size; loop until `next` is absent. */
-const MAX_LIST_PAGES = 2000;
+/** Bitrix list: safety cap (pages), not total rows. */
+const MAX_LIST_PAGES = 200;
+const BITRIX_LIST_PAGE_SIZE = 50;
+
+/**
+ * Общая пагинация Bitrix list-методов (department.get, user.get, …).
+ * Защита от повторяющихся start / подписи страницы и зацикливания next.
+ */
+async function fetchBitrixListAllPages<T>(options: {
+  method: string;
+  baseParams: Record<string, unknown>;
+  pageSizeFallback: number;
+  extractChunk: (result: unknown) => T[];
+  pageSignature: (start: number, chunk: T[]) => string;
+}): Promise<{ items: T[]; pagesFetched: number; breakReason: string | null }> {
+  const { method, baseParams, pageSizeFallback, extractChunk, pageSignature } = options;
+  const items: T[] = [];
+  let start = 0;
+  let pagesFetched = 0;
+  const seenStarts = new Set<number>();
+  const seenSignatures = new Set<string>();
+  let breakReason: string | null = null;
+
+  while (pagesFetched < MAX_LIST_PAGES) {
+    if (seenStarts.has(start)) {
+      breakReason = "duplicate_start";
+      console.warn(
+        `[bitrix-org-sync] pagination_break method=${method} reason=${breakReason} start=${start}`
+      );
+      break;
+    }
+    seenStarts.add(start);
+
+    const { result, next, total } = await bitrixCallWithMeta<unknown>(method, { ...baseParams, start });
+    const chunk = extractChunk(result);
+    const sig = pageSignature(start, chunk);
+    if (seenSignatures.has(sig)) {
+      breakReason = "duplicate_page_signature";
+      console.warn(
+        `[bitrix-org-sync] pagination_break method=${method} reason=${breakReason} start=${start} signature=${sig}`
+      );
+      break;
+    }
+    seenSignatures.add(sig);
+
+    const firstId =
+      chunk.length > 0 && typeof (chunk[0] as { ID?: unknown }).ID !== "undefined"
+        ? String((chunk[0] as { ID?: unknown }).ID)
+        : "—";
+    const lastId =
+      chunk.length > 0 && typeof (chunk[chunk.length - 1] as { ID?: unknown }).ID !== "undefined"
+        ? String((chunk[chunk.length - 1] as { ID?: unknown }).ID)
+        : "—";
+
+    console.log(
+      `[bitrix-org-sync] page method=${method} start=${start} count=${chunk.length} next=${next ?? "null"} total=${total ?? "null"} firstId=${firstId} lastId=${lastId}`
+    );
+
+    if (chunk.length === 0) {
+      breakReason = "empty_result";
+      console.log(`[bitrix-org-sync] pagination_break method=${method} reason=${breakReason} start=${start}`);
+      break;
+    }
+
+    items.push(...chunk);
+    pagesFetched += 1;
+
+    const nextNum =
+      next !== undefined && next !== null && Number.isFinite(Number(next)) ? Number(next) : null;
+
+    if (nextNum !== null) {
+      if (nextNum === start) {
+        breakReason = "stuck_next_equals_start";
+        console.warn(
+          `[bitrix-org-sync] pagination_break method=${method} reason=${breakReason} start=${start} next=${nextNum}`
+        );
+        break;
+      }
+      start = nextNum;
+      continue;
+    }
+
+    if (chunk.length < pageSizeFallback) {
+      breakReason = "partial_page_no_next";
+      console.log(`[bitrix-org-sync] pagination_break method=${method} reason=${breakReason} start=${start}`);
+      break;
+    }
+
+    if (chunk.length === pageSizeFallback) {
+      start += pageSizeFallback;
+      continue;
+    }
+
+    breakReason = "unexpected_chunk_size";
+    console.warn(
+      `[bitrix-org-sync] pagination_break method=${method} reason=${breakReason} start=${start} count=${chunk.length}`
+    );
+    break;
+  }
+
+  if (pagesFetched >= MAX_LIST_PAGES && !breakReason) {
+    breakReason = "max_list_pages";
+    console.warn(`[bitrix-org-sync] pagination_break method=${method} reason=${breakReason} pages=${pagesFetched}`);
+  }
+
+  return { items, pagesFetched, breakReason };
+}
 
 function isActiveBitrixUser(active: unknown): boolean {
   if (active === true || active === "Y" || active === "y" || active === 1 || active === "1") return true;
@@ -77,43 +182,22 @@ export type FetchBitrixDepartmentsPagedResult = {
 
 /**
  * All departments from Bitrix (paginated `department.get`).
- * Bitrix returns 50 rows per page; use `next` when present, otherwise advance `start` by 50.
  */
 export async function fetchBitrixDepartmentsPaged(): Promise<FetchBitrixDepartmentsPagedResult> {
-  const all: ReturnType<typeof mapDepartmentRow>[] = [];
-  let start = 0;
-  let pages = 0;
-  const BITRIX_DEPT_PAGE = 50;
+  const { items, pagesFetched } = await fetchBitrixListAllPages<BitrixDepartment>({
+    method: "department.get",
+    baseParams: { sort: "ID", order: "ASC" },
+    pageSizeFallback: BITRIX_LIST_PAGE_SIZE,
+    extractChunk: (result) => (Array.isArray(result) ? (result as BitrixDepartment[]) : []),
+    pageSignature: (s, chunk) =>
+      `${s}:${chunk.length}:${chunk.map((d) => String(d.ID ?? "")).join(",")}`
+  });
 
-  while (pages < MAX_LIST_PAGES) {
-    const { result, next, total } = await bitrixCallWithMeta<BitrixDepartment[]>("department.get", {
-      sort: "ID",
-      order: "ASC",
-      start
-    });
-    const chunk = Array.isArray(result) ? result : [];
-    pages += 1;
-    console.log(
-      `[bitrix-org-sync] departments_page_fetched start=${start} count=${chunk.length} next=${next ?? "null"} total=${total ?? "null"}`
-    );
-    for (const d of chunk) {
-      all.push(mapDepartmentRow(d));
-    }
-    if (chunk.length === 0) break;
-    if (next !== undefined && next !== null && Number.isFinite(Number(next))) {
-      const n = Number(next);
-      if (n === start) break;
-      start = n;
-      continue;
-    }
-    if (chunk.length < BITRIX_DEPT_PAGE) break;
-    start += BITRIX_DEPT_PAGE;
-  }
-
+  const departments = items.map(mapDepartmentRow);
   return {
-    departments: all,
-    departmentsFetchedTotal: all.length,
-    departmentsPagesFetched: pages
+    departments,
+    departmentsFetchedTotal: departments.length,
+    departmentsPagesFetched: pagesFetched
   };
 }
 
@@ -132,38 +216,25 @@ export type FetchBitrixUsersRawForSyncResult = {
  * All portal users from Bitrix (paginated `user.get`). No ACTIVE filter — callers filter.
  */
 export async function fetchBitrixUsersRawForSync(): Promise<FetchBitrixUsersRawForSyncResult> {
-  const all: BitrixUser[] = [];
-  let start = 0;
-  let pages = 0;
-
   const baseParams = {
     sort: "ID",
     order: "ASC",
     select: [...USER_GET_SELECT]
   };
 
-  while (pages < MAX_LIST_PAGES) {
-    const { result, next, total } = await bitrixCallWithMeta<BitrixUser[]>("user.get", {
-      ...baseParams,
-      start
-    });
-    const chunk = Array.isArray(result) ? result : [];
-    pages += 1;
-    console.log(
-      `[bitrix-org-sync] users_page_fetched start=${start} count=${chunk.length} next=${next ?? "null"} total=${total ?? "null"}`
-    );
-    all.push(...chunk);
-    if (next === undefined || next === null || !Number.isFinite(next)) break;
-    const n = Number(next);
-    if (chunk.length === 0) break;
-    if (n === start) break;
-    start = n;
-  }
+  const { items, pagesFetched } = await fetchBitrixListAllPages<BitrixUser>({
+    method: "user.get",
+    baseParams,
+    pageSizeFallback: BITRIX_LIST_PAGE_SIZE,
+    extractChunk: (result) => (Array.isArray(result) ? (result as BitrixUser[]) : []),
+    pageSignature: (s, chunk) =>
+      `${s}:${chunk.length}:${chunk.map((u) => String(u.ID ?? "")).join(",")}`
+  });
 
   return {
-    users: all,
-    usersFetchedTotal: all.length,
-    usersPagesFetched: pages
+    users: items,
+    usersFetchedTotal: items.length,
+    usersPagesFetched: pagesFetched
   };
 }
 
