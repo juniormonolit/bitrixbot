@@ -13,7 +13,7 @@ export type AlertingSettings = {
 const defaults: AlertingSettings = {
   sending_enabled: false,
   mirror_enabled: true,
-  mirror_bitrix_user_id: "2089",
+  mirror_bitrix_user_id: "2098",
   dry_run_mode: true,
   send_only_to_mirror: false,
   updated_by: null,

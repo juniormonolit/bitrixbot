@@ -34,7 +34,7 @@ values (
   '{
     "sending_enabled": false,
     "mirror_enabled": true,
-    "mirror_bitrix_user_id": "2089",
+    "mirror_bitrix_user_id": "2098",
     "dry_run_mode": true,
     "updated_by": null,
     "updated_reason": null

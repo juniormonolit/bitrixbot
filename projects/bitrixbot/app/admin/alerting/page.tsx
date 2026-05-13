@@ -201,7 +201,7 @@ export default async function AlertingConsolePage({
       dry_run_mode: false,
       send_only_to_mirror: true,
       mirror_enabled: true,
-      mirror_bitrix_user_id: "2089",
+      mirror_bitrix_user_id: "2098",
       updated_reason: "Консоль: тестовый режим mirror-only (preset)"
     });
     revalidatePath("/admin/alerting");
@@ -280,14 +280,14 @@ export default async function AlertingConsolePage({
             <code className="text-white/85">dry_run_mode=false</code>,{" "}
             <code className="text-white/85">send_only_to_mirror=true</code>,{" "}
             <code className="text-white/85">mirror_enabled=true</code>,{" "}
-            <code className="text-white/85">mirror_bitrix_user_id=2089</code>.
+            <code className="text-white/85">mirror_bitrix_user_id=2098</code>.
           </p>
           <form action={applyMirrorOnlyTestPreset}>
             <button
               type="submit"
               className="rounded-md bg-amber-500/25 px-4 py-2 text-sm font-medium text-amber-50 ring-1 ring-amber-400/40 hover:bg-amber-500/35"
             >
-              Включить тестовый пресет (mirror-only, user 2089)
+              Включить тестовый пресет (mirror-only, user 2098)
             </button>
           </form>
         </Card>
@@ -297,7 +297,7 @@ export default async function AlertingConsolePage({
             <li>Включите sending_enabled (разрешить реальную отправку).</li>
             <li>Выключите dry_run_mode (снять безопасный режим).</li>
             <li>Включите send_only_to_mirror (только дубль основным адресатам не уходит).</li>
-            <li>Проверьте mirror_bitrix_user_id (в пресете — 2089, при необходимости поправьте и сохраните).</li>
+            <li>Проверьте mirror_bitrix_user_id (в пресете — 2098, при необходимости поправьте и сохраните).</li>
             <li>
               В блоке «Ручные действия» выберите <strong>Запустить полный цикл</strong> и выполните.
             </li>
