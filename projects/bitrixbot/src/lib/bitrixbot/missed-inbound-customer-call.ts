@@ -1,3 +1,5 @@
+import { callEventHasOutboundSignals, resolveCallTypeDigits } from "@/src/lib/bitrixbot/call-event-outbound";
+
 type JsonObject = Record<string, unknown>;
 
 function getObj(value: unknown): JsonObject {
@@ -70,22 +72,6 @@ export type CallEventForInboundFilter = {
 };
 
 /**
- * Resolve Bitrix CALL_TYPE: payload first, then DB column (see normalizeBitrixCallEvent ingest).
- *
- * Bitrix Voximplant:
- * - CALL_TYPE "1" = outbound (исходящий)
- * - CALL_TYPE "2" = inbound (входящий)
- */
-function resolveCallTypeForFilter(event: CallEventForInboundFilter): string {
-  const root = getObj(event.raw_payload);
-  const data = getObj(root.data ?? root.DATA);
-  const fromPayload = getString(data.CALL_TYPE);
-  if (fromPayload) return fromPayload;
-  const col = event.call_type_raw?.trim();
-  return col ?? "";
-}
-
-/**
  * Человекочитаемая причина для логов (без префикса skip_).
  */
 export function filterSkipReasonLabel(reason: string): string {
@@ -104,20 +90,19 @@ export function evaluateMissedInboundCustomerCall(callEvent: CallEventForInbound
   }
 
   const data = getObj(root.data ?? root.DATA);
-  const callType = resolveCallTypeForFilter(callEvent).trim();
 
-  if (callEvent.call_direction === "outbound") {
+  if (callEventHasOutboundSignals(callEvent)) {
+    const ct = resolveCallTypeDigits(callEvent).trim();
     return {
       ok: false,
       reason: "skip_outgoing_call",
-      callType: callType || null,
+      callType: ct || callEvent.call_type_raw?.trim() || null,
       event: eventName
     };
   }
 
-  if (callType === "1") {
-    return { ok: false, reason: "skip_outgoing_call", callType, event: eventName };
-  }
+  const callType = resolveCallTypeDigits(callEvent).trim();
+
   if (callType === "3") {
     return { ok: false, reason: "skip_call_type_3", callType, event: eventName };
   }

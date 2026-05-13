@@ -1,9 +1,12 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { selectNotificationRule, NotificationRuleRow } from "@/src/lib/bitrixbot/select-notification-rule";
 import { prepareNotificationsForMissedCallCase } from "@/src/lib/bitrixbot/prepare-notifications-for-missed-call-case";
+import { outboundActivityBlocksMissedPrepare } from "@/src/lib/bitrixbot/alerting-prepare-outbound-guard";
 
 type CaseRow = {
   id: string;
+  phone_normalized: string;
+  context: unknown;
   missed_count: number;
   last_missed_at: string;
   last_outbound_at: string | null;
@@ -69,7 +72,9 @@ export async function processNoCallbackEscalations(
 
   const { data: cases, error: casesErr } = await supabase
     .from("missed_call_cases")
-    .select("id, missed_count, last_missed_at, last_outbound_at, last_successful_callback_at")
+    .select(
+      "id, phone_normalized, context, missed_count, last_missed_at, last_outbound_at, last_successful_callback_at"
+    )
     .eq("status", "open")
     .order("last_missed_at", { ascending: true })
     .limit(limit);
@@ -86,6 +91,16 @@ export async function processNoCallbackEscalations(
     try {
       if (hasCallbackAfter(row)) {
         skipped++;
+        continue;
+      }
+
+      const outboundBlock = await outboundActivityBlocksMissedPrepare(supabase, {
+        phone_normalized: row.phone_normalized,
+        context: row.context
+      });
+      if (outboundBlock) {
+        skipped++;
+        warnings.push(`${row.id}:escalation_blocked_${outboundBlock}`);
         continue;
       }
 

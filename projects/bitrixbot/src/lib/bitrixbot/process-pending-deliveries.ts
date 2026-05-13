@@ -7,6 +7,7 @@ import {
   refreshPendingDeliveryMessagePhoneLine
 } from "@/src/lib/bitrixbot/re-enrich-case-deal";
 import { sendBitrixMessage } from "@/src/lib/bitrixbot/send-bitrix-message";
+import { outboundActivityBlocksMissedPrepare } from "@/src/lib/bitrixbot/alerting-prepare-outbound-guard";
 
 type DeliveryRow = {
   id: string;
@@ -156,6 +157,40 @@ export async function processPendingDeliveries(
     const now = new Date().toISOString();
 
     let messageText = d.message_text;
+
+    try {
+      const { data: caseMini, error: cmErr } = await withTimeout(
+        supabase
+          .from("missed_call_cases")
+          .select("phone_normalized, context")
+          .eq("id", d.case_id)
+          .maybeSingle(),
+        2500,
+        `pending_case_mini:${d.case_id}`
+      );
+      if (!cmErr && caseMini) {
+        const blockReason = await outboundActivityBlocksMissedPrepare(supabase, {
+          phone_normalized: (caseMini as { phone_normalized: string }).phone_normalized,
+          context: (caseMini as { context?: unknown }).context ?? null
+        });
+        if (blockReason) {
+          const { error: skipErr } = await supabase
+            .from("notification_deliveries")
+            .update({
+              delivery_status: "skipped",
+              error_message: `blocked_outbound_before_send:${blockReason}`
+            })
+            .eq("id", d.id);
+          if (skipErr) throw new Error(skipErr.message);
+          warnings.push(`${d.id}:send_blocked_${blockReason}`);
+          continue;
+        }
+      }
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      warnings.push(`${d.id}:outbound_guard_before_send_failed:${m}`);
+    }
+
     try {
       const quick = await withTimeout(maybeReenrichCaseBeforeSend(supabase, d.case_id), 2500, `re_enrich:${d.case_id}`);
       if (quick.attempted && !quick.chosen) {

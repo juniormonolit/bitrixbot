@@ -15,3 +15,4 @@ export {
   filterSkipReasonLabel,
   isMissedInboundCustomerCall
 } from "@/src/lib/bitrixbot/missed-inbound-customer-call";
+export { callEventHasOutboundSignals, resolveCallTypeDigits } from "@/src/lib/bitrixbot/call-event-outbound";

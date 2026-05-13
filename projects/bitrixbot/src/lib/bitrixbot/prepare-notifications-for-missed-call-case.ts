@@ -12,6 +12,7 @@ import { formatPhoneForDisplay } from "@/lib/bitrix/phone-normalize";
 import { dealUrlForMessageTemplate } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
 import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
 import { renderMessageTemplate } from "@/src/lib/bitrixbot/render-message-template";
+import { outboundActivityBlocksMissedPrepare } from "@/src/lib/bitrixbot/alerting-prepare-outbound-guard";
 
 const LOG = "[alerting:prepare-notifications]";
 const DB_OP_MS = 2_500;
@@ -38,6 +39,7 @@ type MissedCallCaseRow = {
   last_missed_at: string;
   last_outbound_at: string | null;
   last_successful_callback_at: string | null;
+  context: unknown;
 };
 
 type ResolvedHierarchyRow = {
@@ -154,7 +156,7 @@ export async function prepareNotificationsForMissedCallCase(
     supabase
       .from("missed_call_cases")
       .select(
-        "id, phone_normalized, deal_id, deal_url, deal_title, contact_name, manager_bitrix_user_id, manager_name, department_id, missed_count, last_missed_at, last_outbound_at, last_successful_callback_at"
+        "id, phone_normalized, deal_id, deal_url, deal_title, contact_name, manager_bitrix_user_id, manager_name, department_id, missed_count, last_missed_at, last_outbound_at, last_successful_callback_at, context"
       )
       .eq("id", caseId)
       .maybeSingle(),
@@ -175,6 +177,27 @@ export async function prepareNotificationsForMissedCallCase(
   }
 
   const typedCase = caseRow as MissedCallCaseRow;
+
+  const outboundPrepareBlock = await outboundActivityBlocksMissedPrepare(supabase, {
+    phone_normalized: typedCase.phone_normalized,
+    context: typedCase.context
+  });
+  if (outboundPrepareBlock) {
+    warnings.push(`prepare_blocked_${outboundPrepareBlock}`);
+    console.log(`${LOG} blocked_outbound_prepare`, {
+      caseId,
+      reason: outboundPrepareBlock,
+      phone_normalized: typedCase.phone_normalized
+    });
+    return {
+      caseId: typedCase.id,
+      selectedRuleId: null,
+      createdDeliveriesCount: 0,
+      skippedRecipients,
+      warnings,
+      managerRecipientFallbackUsed: false
+    };
+  }
 
   mark(diag, "prepare_notifications_lookup_employee_start", {
     manager_bitrix_user_id: typedCase.manager_bitrix_user_id

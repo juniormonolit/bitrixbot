@@ -230,6 +230,7 @@ export async function processNewMissedCallEvents(
     .from("call_events")
     .select("id, occurred_at, phone_normalized, manager_bitrix_user_id")
     .eq("status", "missed")
+    .or("call_direction.is.null,call_direction.eq.inbound,call_direction.eq.unknown")
     .order("occurred_at", { ascending: false })
     .limit(candidateFetchSize);
 

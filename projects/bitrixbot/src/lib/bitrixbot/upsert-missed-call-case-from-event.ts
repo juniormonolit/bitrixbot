@@ -263,7 +263,7 @@ export async function upsertMissedCallCaseFromEvent(
     if (!inboundEval.ok) {
       const phoneLog = ce.phone_normalized?.trim() ?? "";
       console.log(
-        `[missed-call-filter] skip callEventId=${ce.id} reason=${filterSkipReasonLabel(inboundEval.reason)} callType=${inboundEval.callType ?? ""} phone=${phoneLog} event=${inboundEval.event ?? ""}`
+        `[missed-call-filter] skip reason=${filterSkipReasonLabel(inboundEval.reason)} callEventId=${ce.id} callType=${inboundEval.callType ?? ""} direction=${ce.call_direction ?? ""} event=${inboundEval.event ?? ""} phone=${phoneLog} case=none`
       );
       await markProcessing(supabase, processing.id, {
         processing_status: "skipped",

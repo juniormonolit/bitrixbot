@@ -62,6 +62,9 @@ export async function GET(req: Request) {
 
   const callEvents = callEventRows.map((ev) => ({
     id: ev.id,
+    status: ev.status,
+    call_direction: ev.call_direction,
+    call_type_raw: ev.call_type_raw,
     crm_activity_id: ev.crm_activity_id,
     bitrix_deal_id: ev.bitrix_deal_id,
     deal_url: normalizeStoredDealUrl(ev.deal_url),
@@ -96,6 +99,7 @@ export async function GET(req: Request) {
     case: {
       id: c.id,
       phone: c.phone_normalized,
+      context: c.context,
       bitrix_deal_id: c.deal_id != null ? String(c.deal_id) : null,
       deal_url: normalizeStoredDealUrl(c.deal_url),
       deal_title: c.deal_title,
