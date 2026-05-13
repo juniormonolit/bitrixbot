@@ -1,5 +1,10 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
+import { withTimeout } from "@/src/lib/bitrixbot/async-timeout";
 import { getAlertingSettings } from "@/src/lib/bitrixbot/get-alerting-settings";
+import {
+  maybeReenrichCaseBeforeSend,
+  refreshPendingDeliveryMessageDealLine
+} from "@/src/lib/bitrixbot/re-enrich-case-deal";
 import { sendBitrixMessage } from "@/src/lib/bitrixbot/send-bitrix-message";
 
 type DeliveryRow = {
@@ -149,6 +154,33 @@ export async function processPendingDeliveries(
   for (const d of (deliveries ?? []) as DeliveryRow[]) {
     const now = new Date().toISOString();
 
+    let messageText = d.message_text;
+    try {
+      const quick = await withTimeout(maybeReenrichCaseBeforeSend(supabase, d.case_id), 2500, `re_enrich:${d.case_id}`);
+      if (quick.attempted && !quick.chosen) {
+        warnings.push(`re_enrich_no_deal:${d.case_id}`);
+      }
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      warnings.push(`re_enrich_timeout_or_error:${d.case_id}:${m}`);
+    }
+    try {
+      const patched = await refreshPendingDeliveryMessageDealLine(supabase, d.id, d.case_id);
+      if (patched.updated) {
+        warnings.push(`delivery_deal_line_patched:${d.id}`);
+        const { data: dFresh } = await supabase
+          .from("notification_deliveries")
+          .select("message_text")
+          .eq("id", d.id)
+          .maybeSingle();
+        if (dFresh && typeof (dFresh as { message_text?: string }).message_text === "string") {
+          messageText = (dFresh as { message_text: string }).message_text;
+        }
+      }
+    } catch {
+      warnings.push(`delivery_deal_line_patch_failed:${d.id}`);
+    }
+
     if (!d.recipient_bitrix_user_id && mode === "live") {
       const { error: updErr } = await supabase
         .from("notification_deliveries")
@@ -172,7 +204,7 @@ export async function processPendingDeliveries(
         recipient_role: d.recipient_role,
         recipient_bitrix_user_id: d.recipient_bitrix_user_id,
         case_id: d.case_id,
-        original_message_text: d.message_text
+        original_message_text: messageText
       });
 
       const { data: existingMirror, error: exMirErr } = await supabase
@@ -230,7 +262,7 @@ export async function processPendingDeliveries(
     // Live mode: send primary
     const sendRes = await sendBitrixMessage({
       bitrixUserId: d.recipient_bitrix_user_id ?? "",
-      messageText: d.message_text
+      messageText: messageText
     });
 
     if (sendRes.ok) {
@@ -257,7 +289,7 @@ export async function processPendingDeliveries(
           recipient_role: d.recipient_role,
           recipient_bitrix_user_id: d.recipient_bitrix_user_id,
           case_id: d.case_id,
-          original_message_text: d.message_text
+          original_message_text: messageText
         });
 
         const mirrorRow = await upsertMirrorRow(supabase, {

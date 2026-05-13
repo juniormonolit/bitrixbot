@@ -1,7 +1,8 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import {
   buildDealDetailsUrl,
-  enrichCallEventDealPipeline
+  enrichCallEventDealPipeline,
+  normalizeStoredDealUrl
 } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
 import { extractCallContext } from "@/src/lib/bitrixbot/extract-call-context";
 import { isMissedInboundCallEvent } from "@/src/lib/bitrixbot/is-missed-inbound-call-event";
@@ -357,12 +358,10 @@ export async function upsertMissedCallCaseFromEvent(
       };
 
       const nextDealId = current.deal_id ?? ctx.dealId;
-      const builtFromCtx =
-        ctx.dealId != null ? buildDealDetailsUrl(ctx.dealId) : "";
       const nextDealUrl =
-        mergedCe.deal_url?.trim() ||
-        (builtFromCtx || null) ||
-        current.deal_url?.trim() ||
+        normalizeStoredDealUrl(mergedCe.deal_url) ||
+        (ctx.dealId != null ? buildDealDetailsUrl(ctx.dealId) : "") ||
+        normalizeStoredDealUrl(current.deal_url) ||
         buildDealDetailsUrl(nextDealId) ||
         null;
       const nextDealTitle =
@@ -421,7 +420,7 @@ export async function upsertMissedCallCaseFromEvent(
       );
     } else {
       const dealUrl =
-        mergedCe.deal_url?.trim() ||
+        normalizeStoredDealUrl(mergedCe.deal_url) ||
         (ctx.dealId != null ? buildDealDetailsUrl(ctx.dealId) : "") ||
         null;
       const insertPayload = {

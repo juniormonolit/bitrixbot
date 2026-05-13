@@ -43,6 +43,19 @@ function asTrimmedString(v: unknown): string {
   return String(v).trim();
 }
 
+/**
+ * Stored deal_url must be a real URL or null — never placeholder human text.
+ */
+export function normalizeStoredDealUrl(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  const v = String(value).trim();
+  if (!v) return null;
+  if (v === "Сделка: не определена") return null;
+  if (v === "не определена") return null;
+  if (v.includes("не определена")) return null;
+  return v;
+}
+
 export function buildDealDetailsUrl(dealId: string | number | null | undefined): string {
   if (dealId === null || dealId === undefined) return "";
   const v = String(dealId).trim();
@@ -63,10 +76,10 @@ export function dealUrlForMessageTemplate(
   storedUrl: string | null | undefined,
   dealId: number | null
 ): string {
-  const u = storedUrl?.trim();
-  if (u) {
-    const normalized = stripLegacyDealLabelPrefix(u);
-    return normalized || "не определена";
+  const normalizedStored = normalizeStoredDealUrl(storedUrl);
+  if (normalizedStored) {
+    const stripped = stripLegacyDealLabelPrefix(normalizedStored);
+    return stripped || "не определена";
   }
   return buildDealDetailsUrl(dealId) || "не определена";
 }
@@ -325,7 +338,8 @@ async function persistSkipReason(
     .update({
       deal_enriched_at: now,
       deal_enrichment_error: reason,
-      deal_enrichment_source: source
+      deal_enrichment_source: source,
+      deal_url: null
     })
     .eq("id", ce.id);
   return { error };
@@ -337,9 +351,12 @@ async function persistSkipReason(
  */
 export async function enrichCallEventDealPipeline(
   supabase: SupabaseClient,
-  ce: CallEventDealEnrichmentRow
+  ce: CallEventDealEnrichmentRow,
+  options?: { force?: boolean }
 ): Promise<CallEventDealEnrichmentRow> {
-  if (ce.deal_enriched_at) {
+  const force = Boolean(options?.force);
+  const hasDeal = Boolean(ce.bitrix_deal_id?.trim());
+  if (ce.deal_enriched_at && (hasDeal || !force)) {
     return ce;
   }
 
@@ -350,7 +367,7 @@ export async function enrichCallEventDealPipeline(
   try {
     if (ce.bitrix_deal_id?.trim()) {
       const id = ce.bitrix_deal_id.trim();
-      const url = ce.deal_url?.trim() || buildDealDetailsUrl(id);
+      const url = normalizeStoredDealUrl(ce.deal_url) || buildDealDetailsUrl(id);
       let title = ce.deal_title?.trim() || "";
       if (!title) title = (await fetchDealTitle(id)) || `Сделка #${id}`;
       const patch = {
@@ -451,7 +468,8 @@ export async function enrichCallEventDealPipeline(
       .update({
         deal_enriched_at: now,
         deal_enrichment_error: `enrichment_exception:${msg}`,
-        deal_enrichment_source: "not_found"
+        deal_enrichment_source: "not_found",
+        deal_url: null
       })
       .eq("id", ce.id);
     if (error) console.log(`${LOG} persist_failed callEventId=${ce.id} err=${error.message}`);

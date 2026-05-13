@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
+import { loadCallEventsForCase } from "@/src/lib/bitrixbot/case-call-events";
+import { redactSecretsForDebug } from "@/src/lib/bitrixbot/redact-webhook-payload";
+import { normalizeStoredDealUrl } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
 
 function isAuthorized(req: Request): boolean {
   const header = req.headers.get("x-debug-secret") ?? "";
@@ -9,33 +12,6 @@ function isAuthorized(req: Request): boolean {
   const secret = header || query;
   return Boolean(secret && secret === env.DEBUG_SECRET);
 }
-
-function collectCallEventIdsFromCaseContext(context: unknown): string[] {
-  const ids: string[] = [];
-  const o = context && typeof context === "object" ? (context as Record<string, unknown>) : {};
-  const add = (v: unknown) => {
-    if (typeof v === "string" && v.trim()) ids.push(v.trim());
-  };
-  add(o.last_call_event_id);
-  add(o.created_from_call_event_id);
-  return ids;
-}
-
-type CallEventDebugRow = {
-  id: string;
-  crm_activity_id: string | null;
-  bitrix_deal_id: string | null;
-  deal_url: string | null;
-  deal_title: string | null;
-  deal_enriched_at: string | null;
-  deal_enrichment_error: string | null;
-  deal_enrichment_source: string | null;
-  raw_payload: unknown;
-  occurred_at: string;
-};
-
-const CALL_EVENT_SELECT =
-  "id, crm_activity_id, bitrix_deal_id, deal_url, deal_title, deal_enriched_at, deal_enrichment_error, deal_enrichment_source, raw_payload, occurred_at";
 
 /** Inspect missed_call_case, related call_events, and notification deliveries (diagnostics). */
 export async function GET(req: Request) {
@@ -78,29 +54,24 @@ export async function GET(req: Request) {
     context: unknown;
   };
 
-  const fromContext = collectCallEventIdsFromCaseContext(c.context);
-  const byId = new Map<string, CallEventDebugRow>();
-
-  const { data: byPhone } = await supabase
-    .from("call_events")
-    .select(CALL_EVENT_SELECT)
-    .eq("phone_normalized", c.phone_normalized)
-    .order("occurred_at", { ascending: false })
-    .limit(20);
-
-  for (const row of (byPhone ?? []) as CallEventDebugRow[]) {
-    byId.set(row.id, row);
-  }
-
-  for (const id of fromContext) {
-    if (byId.has(id)) continue;
-    const { data: one } = await supabase.from("call_events").select(CALL_EVENT_SELECT).eq("id", id).maybeSingle();
-    if (one) byId.set(id, one as CallEventDebugRow);
-  }
-
-  const callEvents = [...byId.values()].sort(
-    (a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime()
+  const callEventRows = await loadCallEventsForCase(
+    supabase,
+    { phone_normalized: c.phone_normalized, context: c.context },
+    50
   );
+
+  const callEvents = callEventRows.map((ev) => ({
+    id: ev.id,
+    crm_activity_id: ev.crm_activity_id,
+    bitrix_deal_id: ev.bitrix_deal_id,
+    deal_url: normalizeStoredDealUrl(ev.deal_url),
+    deal_title: ev.deal_title,
+    deal_enriched_at: ev.deal_enriched_at,
+    deal_enrichment_error: ev.deal_enrichment_error,
+    deal_enrichment_source: ev.deal_enrichment_source,
+    occurred_at: ev.occurred_at,
+    raw_payload_safe: redactSecretsForDebug(ev.raw_payload)
+  }));
 
   const { data: deliveries, error: delErr } = await supabase
     .from("notification_deliveries")
@@ -126,7 +97,7 @@ export async function GET(req: Request) {
       id: c.id,
       phone: c.phone_normalized,
       bitrix_deal_id: c.deal_id != null ? String(c.deal_id) : null,
-      deal_url: c.deal_url,
+      deal_url: normalizeStoredDealUrl(c.deal_url),
       deal_title: c.deal_title,
       deal_enriched_at: c.deal_enriched_at,
       deal_enrichment_error: c.deal_enrichment_error,

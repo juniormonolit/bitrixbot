@@ -16,4 +16,4 @@ export function buildDealUrl(dealId: string | number | null | undefined): string
   return dealUrlForMessageTemplate(null, parseDealIdForTemplate(dealId));
 }
 
-export { buildDealDetailsUrl, dealUrlForMessageTemplate } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
+export { buildDealDetailsUrl, dealUrlForMessageTemplate, normalizeStoredDealUrl } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
