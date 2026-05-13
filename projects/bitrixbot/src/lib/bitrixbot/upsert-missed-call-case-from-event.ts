@@ -1,5 +1,8 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { buildDealUrl } from "@/src/lib/bitrixbot/build-deal-url";
+import {
+  buildDealDetailsUrl,
+  enrichCallEventDealIfNeeded
+} from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
 import { extractCallContext } from "@/src/lib/bitrixbot/extract-call-context";
 import { isMissedInboundCallEvent } from "@/src/lib/bitrixbot/is-missed-inbound-call-event";
 import { lookupEmployeeByBitrixUserId } from "@/src/lib/bitrixbot/employee-lookup";
@@ -30,6 +33,10 @@ type CallEventRow = {
   crm_activity_id: string | null;
   bitrix_call_id: string | null;
   raw_payload: unknown;
+  deal_title: string | null;
+  deal_url: string | null;
+  deal_enriched_at: string | null;
+  deal_enrichment_error: string | null;
 };
 
 type ProcessingRow = {
@@ -166,7 +173,7 @@ export async function upsertMissedCallCaseFromEvent(
     const { data: callEvent, error: callErr } = await supabase
       .from("call_events")
       .select(
-        "id, occurred_at, status, call_direction, phone_normalized, manager_bitrix_user_id, bitrix_deal_id, crm_activity_id, bitrix_call_id, raw_payload"
+        "id, occurred_at, status, call_direction, phone_normalized, manager_bitrix_user_id, bitrix_deal_id, crm_activity_id, bitrix_call_id, raw_payload, deal_title, deal_url, deal_enriched_at, deal_enrichment_error"
       )
       .eq("id", callEventId)
       .single();
@@ -223,7 +230,18 @@ export async function upsertMissedCallCaseFromEvent(
       warnings.push("phone_normalized_missing");
     }
 
-    const ctx = extractCallContext(ce);
+    const ceEnriched = await enrichCallEventDealIfNeeded(supabase, {
+      id: ce.id,
+      bitrix_deal_id: ce.bitrix_deal_id,
+      crm_activity_id: ce.crm_activity_id,
+      deal_title: ce.deal_title ?? null,
+      deal_url: ce.deal_url ?? null,
+      deal_enriched_at: ce.deal_enriched_at ?? null,
+      deal_enrichment_error: ce.deal_enrichment_error ?? null
+    });
+    const mergedCe: CallEventRow = { ...ce, ...ceEnriched };
+
+    const ctx = extractCallContext(mergedCe);
     if (!ctx.phoneNormalized) warnings.push("phone_normalized_missing");
 
     const phoneNorm = ctx.phoneNormalized ?? ce.phone_normalized ?? "";
@@ -303,7 +321,7 @@ export async function upsertMissedCallCaseFromEvent(
       const { data: cur, error: curErr } = await supabase
         .from("missed_call_cases")
         .select(
-          "id, missed_count, manager_bitrix_user_id, manager_name, deal_id, deal_url, contact_name"
+          "id, missed_count, manager_bitrix_user_id, manager_name, deal_id, deal_url, deal_title, deal_enriched_at, deal_enrichment_error, contact_name"
         )
         .eq("id", caseId)
         .single();
@@ -315,11 +333,23 @@ export async function upsertMissedCallCaseFromEvent(
         manager_name: string | null;
         deal_id: number | null;
         deal_url: string | null;
+        deal_title: string | null;
+        deal_enriched_at: string | null;
+        deal_enrichment_error: string | null;
         contact_name: string | null;
       };
 
       const nextDealId = current.deal_id ?? ctx.dealId;
-      const nextDealUrl = current.deal_url ?? buildDealUrl(nextDealId);
+      const nextDealUrl =
+        mergedCe.deal_url?.trim() ||
+        current.deal_url?.trim() ||
+        buildDealDetailsUrl(nextDealId) ||
+        null;
+      const nextDealTitle =
+        mergedCe.deal_title?.trim() || current.deal_title?.trim() || null;
+      const nextDealEnrichedAt = mergedCe.deal_enriched_at || current.deal_enriched_at;
+      const nextDealEnrichmentError =
+        mergedCe.deal_enrichment_error ?? current.deal_enrichment_error;
 
       const updatePayload = {
         missed_count: (current.missed_count ?? 0) + 1,
@@ -329,6 +359,9 @@ export async function upsertMissedCallCaseFromEvent(
         department_id: employeeInfo.departmentId,
         deal_id: nextDealId,
         deal_url: nextDealUrl,
+        deal_title: nextDealTitle,
+        deal_enriched_at: nextDealEnrichedAt,
+        deal_enrichment_error: nextDealEnrichmentError,
         contact_name: current.contact_name ?? ctx.contactName,
         context: {
           last_call_event_id: ce.id,
@@ -349,11 +382,15 @@ export async function upsertMissedCallCaseFromEvent(
       if (upd2Err) supabaseErr("missed_call_cases.update(existing)", upd2Err);
       updatedCase = true;
     } else {
-      const dealUrl = buildDealUrl(ctx.dealId);
+      const dealUrl =
+        mergedCe.deal_url?.trim() || buildDealDetailsUrl(ctx.dealId) || null;
       const insertPayload = {
         phone_normalized: phoneNorm,
         deal_id: ctx.dealId,
         deal_url: dealUrl,
+        deal_title: mergedCe.deal_title?.trim() || null,
+        deal_enriched_at: mergedCe.deal_enriched_at,
+        deal_enrichment_error: mergedCe.deal_enrichment_error,
         contact_name: ctx.contactName,
         manager_bitrix_user_id: ctx.managerBitrixUserId,
         manager_name: employeeInfo.managerName,

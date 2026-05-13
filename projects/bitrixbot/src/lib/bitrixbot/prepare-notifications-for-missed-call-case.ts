@@ -8,7 +8,7 @@ import {
   resolveAlertRecipients,
   type AlertRuleEvaluationContext
 } from "@/src/lib/bitrixbot/alert-notification-rule-engine";
-import { buildDealUrl } from "@/src/lib/bitrixbot/build-deal-url";
+import { dealUrlForMessageTemplate } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
 import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
 import { renderMessageTemplate } from "@/src/lib/bitrixbot/render-message-template";
 
@@ -28,6 +28,7 @@ type MissedCallCaseRow = {
   phone_normalized: string;
   deal_id: number | null;
   deal_url: string | null;
+  deal_title: string | null;
   contact_name: string | null;
   manager_bitrix_user_id: string | null;
   manager_name: string | null;
@@ -152,7 +153,7 @@ export async function prepareNotificationsForMissedCallCase(
     supabase
       .from("missed_call_cases")
       .select(
-        "id, phone_normalized, deal_id, deal_url, contact_name, manager_bitrix_user_id, manager_name, department_id, missed_count, last_missed_at, last_outbound_at, last_successful_callback_at"
+        "id, phone_normalized, deal_id, deal_url, deal_title, contact_name, manager_bitrix_user_id, manager_name, department_id, missed_count, last_missed_at, last_outbound_at, last_successful_callback_at"
       )
       .eq("id", caseId)
       .maybeSingle(),
@@ -221,7 +222,7 @@ export async function prepareNotificationsForMissedCallCase(
 
   mark(diag, "prepare_notifications_resolve_recipients_start", { missedCount: typedCase.missed_count });
 
-  const dealUrl = typedCase.deal_url?.trim() ? typedCase.deal_url : buildDealUrl(typedCase.deal_id);
+  const dealUrl = dealUrlForMessageTemplate(typedCase.deal_url, typedCase.deal_id);
   const managerUid = normalizeBitrixUserId(typedCase.manager_bitrix_user_id);
 
   let created = 0;
@@ -276,7 +277,7 @@ export async function prepareNotificationsForMissedCallCase(
         message: defaultMessageLineForRecipientRole(r.recipient_role),
         manager_name: displayManagerName,
         deal_id: typedCase.deal_id,
-        deal_title: "",
+        deal_title: typedCase.deal_title?.trim() || "",
         deal_url: dealUrl,
         contact_name: typedCase.contact_name,
         phone: typedCase.phone_normalized,
