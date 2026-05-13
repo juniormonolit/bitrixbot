@@ -1,4 +1,4 @@
-import { bitrixCall } from "@/lib/bitrix/client";
+import { bitrixCallWithMeta } from "@/lib/bitrix/client";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { resolveBitrixUserDepartmentIds } from "@/lib/bitrix/bitrix-user-departments";
 
@@ -14,7 +14,10 @@ type BitrixUser = {
   ID: string | number;
   NAME?: string;
   LAST_NAME?: string;
+  SECOND_NAME?: string;
   ACTIVE?: unknown;
+  EMAIL?: string;
+  WORK_POSITION?: string;
   UF_DEPARTMENT?: unknown;
   WORK_DEPARTMENT?: unknown;
   USER_TYPE?: string | null;
@@ -29,11 +32,17 @@ const USER_GET_SELECT = [
   "ID",
   "NAME",
   "LAST_NAME",
+  "SECOND_NAME",
   "ACTIVE",
+  "EMAIL",
+  "WORK_POSITION",
   "UF_DEPARTMENT",
   "WORK_DEPARTMENT",
   "USER_TYPE"
 ] as const;
+
+/** Bitrix list API page size; loop until `next` is absent. */
+const MAX_LIST_PAGES = 2000;
 
 function isActiveBitrixUser(active: unknown): boolean {
   if (active === true || active === "Y" || active === "y" || active === 1 || active === "1") return true;
@@ -45,38 +54,110 @@ function normalizeUserType(v: unknown): string {
   return typeof v === "string" ? v.trim().toLowerCase() : "";
 }
 
-export async function fetchBitrixDepartments(): Promise<
-  { bitrix_department_id: string; name: string; parent_bitrix_department_id: string | null }[]
-> {
-  const raw = await bitrixCall<BitrixDepartment[]>("department.get", {
-    sort: "ID",
-    order: "ASC"
-  });
-
-  return raw.map((d) => ({
+function mapDepartmentRow(d: BitrixDepartment) {
+  return {
     bitrix_department_id: String(d.ID),
     name: String(d.NAME ?? ""),
     parent_bitrix_department_id: toStringId(d.PARENT ?? null)
-  }));
+  };
 }
 
+export type FetchBitrixDepartmentsPagedResult = {
+  departments: ReturnType<typeof mapDepartmentRow>[];
+  departmentsFetchedTotal: number;
+  departmentsPagesFetched: number;
+};
+
 /**
- * Portal users for org sync. Does not filter ACTIVE here — callers filter and log skips.
- * Requests UF_DEPARTMENT / WORK_DEPARTMENT explicitly (Bitrix omits UFs without `select`).
+ * All departments from Bitrix (paginated `department.get`).
  */
-async function fetchBitrixUsersRawForSync(): Promise<BitrixUser[]> {
-  const raw = await bitrixCall<BitrixUser[]>("user.get", {
+export async function fetchBitrixDepartmentsPaged(): Promise<FetchBitrixDepartmentsPagedResult> {
+  const all: ReturnType<typeof mapDepartmentRow>[] = [];
+  let start = 0;
+  let pages = 0;
+
+  while (pages < MAX_LIST_PAGES) {
+    const { result, next, total } = await bitrixCallWithMeta<BitrixDepartment[]>("department.get", {
+      sort: "ID",
+      order: "ASC",
+      start
+    });
+    const chunk = Array.isArray(result) ? result : [];
+    pages += 1;
+    console.log(
+      `[bitrix-org-sync] departments_page_fetched start=${start} count=${chunk.length} next=${next ?? "null"} total=${total ?? "null"}`
+    );
+    for (const d of chunk) {
+      all.push(mapDepartmentRow(d));
+    }
+    if (next === undefined || next === null || !Number.isFinite(next)) break;
+    const n = Number(next);
+    if (chunk.length === 0) break;
+    if (n === start) break;
+    start = n;
+  }
+
+  return {
+    departments: all,
+    departmentsFetchedTotal: all.length,
+    departmentsPagesFetched: pages
+  };
+}
+
+export async function fetchBitrixDepartments(): Promise<FetchBitrixDepartmentsPagedResult["departments"]> {
+  const { departments } = await fetchBitrixDepartmentsPaged();
+  return departments;
+}
+
+export type FetchBitrixUsersRawForSyncResult = {
+  users: BitrixUser[];
+  usersFetchedTotal: number;
+  usersPagesFetched: number;
+};
+
+/**
+ * All portal users from Bitrix (paginated `user.get`). No ACTIVE filter — callers filter.
+ */
+export async function fetchBitrixUsersRawForSync(): Promise<FetchBitrixUsersRawForSyncResult> {
+  const all: BitrixUser[] = [];
+  let start = 0;
+  let pages = 0;
+
+  const baseParams = {
     sort: "ID",
     order: "ASC",
     select: [...USER_GET_SELECT]
-  });
-  return Array.isArray(raw) ? raw : [];
+  };
+
+  while (pages < MAX_LIST_PAGES) {
+    const { result, next, total } = await bitrixCallWithMeta<BitrixUser[]>("user.get", {
+      ...baseParams,
+      start
+    });
+    const chunk = Array.isArray(result) ? result : [];
+    pages += 1;
+    console.log(
+      `[bitrix-org-sync] users_page_fetched start=${start} count=${chunk.length} next=${next ?? "null"} total=${total ?? "null"}`
+    );
+    all.push(...chunk);
+    if (next === undefined || next === null || !Number.isFinite(next)) break;
+    const n = Number(next);
+    if (chunk.length === 0) break;
+    if (n === start) break;
+    start = n;
+  }
+
+  return {
+    users: all,
+    usersFetchedTotal: all.length,
+    usersPagesFetched: pages
+  };
 }
 
 export async function fetchBitrixUsers(): Promise<
   { bitrix_user_id: string; name: string; bitrix_department_id: string | null }[]
 > {
-  const raw = await fetchBitrixUsersRawForSync();
+  const { users: raw } = await fetchBitrixUsersRawForSync();
   return raw
     .filter((u) => isActiveBitrixUser(u.ACTIVE))
     .map((u) => {
@@ -90,13 +171,17 @@ export async function fetchBitrixUsers(): Promise<
     });
 }
 
-export async function syncDepartments(): Promise<{ upserted: number }> {
-  const departments = await fetchBitrixDepartments();
+export async function syncDepartments(): Promise<{
+  upserted: number;
+  departmentsFetchedTotal: number;
+  departmentsPagesFetched: number;
+}> {
+  const { departments, departmentsFetchedTotal, departmentsPagesFetched } = await fetchBitrixDepartmentsPaged();
   const supabase = createServiceRoleClient();
 
   if (departments.length === 0) {
     console.log("[bitrix-org-sync] departments: nothing to upsert");
-    return { upserted: 0 };
+    return { upserted: 0, departmentsFetchedTotal, departmentsPagesFetched };
   }
 
   const { error } = await supabase.from("departments").upsert(departments, {
@@ -104,17 +189,26 @@ export async function syncDepartments(): Promise<{ upserted: number }> {
   });
   if (error) throw new Error(`Supabase departments upsert failed: ${error.message}`);
 
-  console.log("[bitrix-org-sync] departments upserted", { count: departments.length });
-  return { upserted: departments.length };
+  console.log("[bitrix-org-sync] departments upserted", {
+    count: departments.length,
+    departmentsFetchedTotal,
+    departmentsPagesFetched
+  });
+  return { upserted: departments.length, departmentsFetchedTotal, departmentsPagesFetched };
 }
 
-export async function syncEmployees(): Promise<{ upserted: number; skipped: number }> {
+export async function syncEmployees(): Promise<{
+  upserted: number;
+  skipped: number;
+  usersFetchedTotal: number;
+  usersPagesFetched: number;
+}> {
   const supabase = createServiceRoleClient();
-  const raw = await fetchBitrixUsersRawForSync();
+  const { users: raw, usersFetchedTotal, usersPagesFetched } = await fetchBitrixUsersRawForSync();
 
   if (raw.length === 0) {
     console.log("[bitrix-org-sync] employees: nothing to upsert");
-    return { upserted: 0, skipped: 0 };
+    return { upserted: 0, skipped: 0, usersFetchedTotal, usersPagesFetched };
   }
 
   const { data: deptRows, error: deptErr } = await supabase
@@ -199,7 +293,7 @@ export async function syncEmployees(): Promise<{ upserted: number; skipped: numb
 
   if (employees.length === 0) {
     console.log("[bitrix-org-sync] employees: nothing to upsert after filters", { skipped });
-    return { upserted: 0, skipped };
+    return { upserted: 0, skipped, usersFetchedTotal, usersPagesFetched };
   }
 
   const { error } = await supabase.from("employees").upsert(employees, {
@@ -211,8 +305,10 @@ export async function syncEmployees(): Promise<{ upserted: number; skipped: numb
   console.log("[bitrix-org-sync] employees upserted", {
     count: employees.length,
     withDepartment,
-    skipped
+    skipped,
+    usersFetchedTotal,
+    usersPagesFetched
   });
 
-  return { upserted: employees.length, skipped };
+  return { upserted: employees.length, skipped, usersFetchedTotal, usersPagesFetched };
 }

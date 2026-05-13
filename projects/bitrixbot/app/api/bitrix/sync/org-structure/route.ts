@@ -1,10 +1,5 @@
 import { NextResponse } from "next/server";
-import {
-  fetchBitrixDepartments,
-  fetchBitrixUsers,
-  syncDepartments,
-  syncEmployees
-} from "@/lib/bitrix/org";
+import { syncDepartments, syncEmployees } from "@/lib/bitrix/org";
 
 export async function POST() {
   const startedAt = Date.now();
@@ -12,33 +7,50 @@ export async function POST() {
   try {
     console.log("[bitrix-org-sync] start");
 
-    const departments = await fetchBitrixDepartments();
-    console.log("[bitrix-org-sync] fetched departments count", {
-      count: departments.length
+    const {
+      upserted: departmentsUpserted,
+      departmentsFetchedTotal,
+      departmentsPagesFetched
+    } = await syncDepartments();
+    console.log("[bitrix-org-sync] synced departments", {
+      departmentsUpserted,
+      departmentsFetchedTotal,
+      departmentsPagesFetched
     });
 
-    const { upserted: departmentsUpserted } = await syncDepartments();
-    console.log("[bitrix-org-sync] synced departments count", {
-      count: departmentsUpserted
+    const {
+      upserted: employeesUpserted,
+      skipped: employeesSkipped,
+      usersFetchedTotal,
+      usersPagesFetched
+    } = await syncEmployees();
+    console.log("[bitrix-org-sync] synced employees", {
+      employeesUpserted,
+      employeesSkipped,
+      usersFetchedTotal,
+      usersPagesFetched
     });
-
-    const users = await fetchBitrixUsers();
-    console.log("[bitrix-org-sync] fetched users count", { count: users.length });
-
-    const { upserted: employeesUpserted, skipped } = await syncEmployees();
-    console.log("[bitrix-org-sync] synced users count", { count: employeesUpserted });
 
     console.log("[bitrix-org-sync] done", {
       departmentsUpserted,
+      departmentsFetchedTotal,
+      departmentsPagesFetched,
       employeesUpserted,
+      employeesSkipped,
+      usersFetchedTotal,
+      usersPagesFetched,
       durationMs: Date.now() - startedAt
     });
 
     return NextResponse.json({
       ok: true,
       departmentsUpserted,
+      departmentsFetchedTotal,
+      departmentsPagesFetched,
       employeesUpserted,
-      employeesSkipped: skipped
+      employeesSkipped,
+      usersFetchedTotal,
+      usersPagesFetched
     });
   } catch (e) {
     console.log("[bitrix-org-sync] error", {
@@ -55,4 +67,3 @@ export async function POST() {
     );
   }
 }
-

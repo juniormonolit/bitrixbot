@@ -12,13 +12,18 @@ export type BitrixErrorResponse = {
   error_description?: string;
 };
 
-export async function bitrixCall<T = unknown>(
-  method: string,
-  params: JsonRecord = {}
-): Promise<T> {
-  const url = `${env.BITRIX_REST_BASE_URL}${method}.json`;
+export type BitrixListMeta = {
+  /** Pass as `start` for the next page (Bitrix list methods). */
+  next?: number;
+  total?: number;
+};
 
-  const body: JsonRecord = { ...params };
+export type BitrixCallMetaResult<T> = {
+  result: T;
+} & BitrixListMeta;
+
+async function bitrixRequestJson(method: string, body: JsonRecord): Promise<unknown> {
+  const url = `${env.BITRIX_REST_BASE_URL}${method}.json`;
 
   const res = await fetch(url, {
     method: "POST",
@@ -54,13 +59,42 @@ export async function bitrixCall<T = unknown>(
     throw new Error(`Bitrix REST error ${maybeError.error}${desc}`);
   }
 
-  const ok = json as BitrixOkResponse<T>;
+  const ok = json as Partial<BitrixOkResponse<unknown>>;
   if (!("result" in ok)) {
     throw new Error(
       `Bitrix REST unexpected response shape: ${JSON.stringify(json, null, 2)}`
     );
   }
 
+  return json;
+}
+
+/**
+ * Bitrix REST call returning only `result` (backward compatible).
+ */
+export async function bitrixCall<T = unknown>(
+  method: string,
+  params: JsonRecord = {}
+): Promise<T> {
+  const json = await bitrixRequestJson(method, { ...params });
+  const ok = json as BitrixOkResponse<T>;
   return ok.result;
 }
 
+/**
+ * Same as {@link bitrixCall} but exposes `next` / `total` for list pagination (`user.get`, `department.get`, …).
+ */
+export async function bitrixCallWithMeta<T = unknown>(
+  method: string,
+  params: JsonRecord = {}
+): Promise<BitrixCallMetaResult<T>> {
+  const json = await bitrixRequestJson(method, { ...params });
+  const o = json as BitrixOkResponse<T> & { next?: number; total?: number };
+  const next = o.next === undefined || o.next === null ? undefined : Number(o.next);
+  const total = o.total === undefined || o.total === null ? undefined : Number(o.total);
+  return {
+    result: o.result,
+    ...(Number.isFinite(next) ? { next } : {}),
+    ...(Number.isFinite(total) ? { total } : {})
+  };
+}

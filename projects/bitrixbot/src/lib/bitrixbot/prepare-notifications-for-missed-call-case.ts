@@ -12,6 +12,8 @@ import {
 
 const LOG = "[alerting:prepare-notifications]";
 const DB_OP_MS = 2_500;
+/** Inserts can be slower under load; keep other reads at DB_OP_MS. */
+const DELIVERY_INSERT_TIMEOUT_MS = 6_000;
 const RULES_LIMIT = 300;
 
 export type PrepareNotificationsDiag = { lastStage: string };
@@ -371,7 +373,7 @@ export async function prepareNotificationsForMissedCallCase(
 
     const { error: insErr } = await withTimeout(
       supabase.from("notification_deliveries").insert(insertRow as never),
-      DB_OP_MS,
+      DELIVERY_INSERT_TIMEOUT_MS,
       `notification_deliveries.insert:${r.role}`
     );
     if (insErr) throw new Error(insErr.message);

@@ -6,8 +6,12 @@ import {
 
 export type SyncOrgStructureFromBitrixResult = {
   departmentsUpserted: number;
+  departmentsFetchedTotal: number;
+  departmentsPagesFetched: number;
   employeesUpserted: number;
   employeesSkipped: number;
+  usersFetchedTotal: number;
+  usersPagesFetched: number;
   hierarchy: RebuildHierarchyResult;
 };
 
@@ -15,8 +19,26 @@ export type SyncOrgStructureFromBitrixResult = {
  * Подтянуть департаменты и сотрудников из Bitrix24, затем пересобрать кэш иерархии.
  */
 export async function syncOrgStructureFromBitrixAndRebuild(): Promise<SyncOrgStructureFromBitrixResult> {
-  const { upserted: departmentsUpserted } = await syncDepartments();
-  const { upserted: employeesUpserted, skipped: employeesSkipped } = await syncEmployees();
+  const {
+    upserted: departmentsUpserted,
+    departmentsFetchedTotal,
+    departmentsPagesFetched
+  } = await syncDepartments();
+  const {
+    upserted: employeesUpserted,
+    skipped: employeesSkipped,
+    usersFetchedTotal,
+    usersPagesFetched
+  } = await syncEmployees();
   const hierarchy = await rebuildOrgResolvedHierarchy();
-  return { departmentsUpserted, employeesUpserted, employeesSkipped, hierarchy };
+  return {
+    departmentsUpserted,
+    departmentsFetchedTotal,
+    departmentsPagesFetched,
+    employeesUpserted,
+    employeesSkipped,
+    usersFetchedTotal,
+    usersPagesFetched,
+    hierarchy
+  };
 }
