@@ -1,5 +1,6 @@
 import { bitrixCallWithMeta } from "@/lib/bitrix/client";
 import { createServiceRoleClient } from "@/lib/supabase/server";
+import { fetchAllByRange } from "@/src/lib/supabase/fetch-all-by-range";
 import { resolveBitrixUserDepartmentIds } from "@/lib/bitrix/bitrix-user-departments";
 
 export { normalizeDepartmentIdList, resolveBitrixUserDepartmentIds } from "@/lib/bitrix/bitrix-user-departments";
@@ -8,6 +9,9 @@ type BitrixDepartment = {
   ID: string | number;
   NAME?: string;
   PARENT?: string | number | null;
+  /** Department head (руководитель подразделения) — Bitrix REST. */
+  UF_HEAD?: string | number | null;
+  HEAD?: string | number | null;
 };
 
 type BitrixUser = {
@@ -55,10 +59,13 @@ function normalizeUserType(v: unknown): string {
 }
 
 function mapDepartmentRow(d: BitrixDepartment) {
+  const headRaw = d.UF_HEAD ?? d.HEAD ?? null;
   return {
     bitrix_department_id: String(d.ID),
     name: String(d.NAME ?? ""),
-    parent_bitrix_department_id: toStringId(d.PARENT ?? null)
+    parent_bitrix_department_id: toStringId(d.PARENT ?? null),
+    head_bitrix_user_id: toStringId(headRaw),
+    director_bitrix_user_id: null as string | null
   };
 }
 
@@ -70,11 +77,13 @@ export type FetchBitrixDepartmentsPagedResult = {
 
 /**
  * All departments from Bitrix (paginated `department.get`).
+ * Bitrix returns 50 rows per page; use `next` when present, otherwise advance `start` by 50.
  */
 export async function fetchBitrixDepartmentsPaged(): Promise<FetchBitrixDepartmentsPagedResult> {
   const all: ReturnType<typeof mapDepartmentRow>[] = [];
   let start = 0;
   let pages = 0;
+  const BITRIX_DEPT_PAGE = 50;
 
   while (pages < MAX_LIST_PAGES) {
     const { result, next, total } = await bitrixCallWithMeta<BitrixDepartment[]>("department.get", {
@@ -90,11 +99,15 @@ export async function fetchBitrixDepartmentsPaged(): Promise<FetchBitrixDepartme
     for (const d of chunk) {
       all.push(mapDepartmentRow(d));
     }
-    if (next === undefined || next === null || !Number.isFinite(next)) break;
-    const n = Number(next);
     if (chunk.length === 0) break;
-    if (n === start) break;
-    start = n;
+    if (next !== undefined && next !== null && Number.isFinite(Number(next))) {
+      const n = Number(next);
+      if (n === start) break;
+      start = n;
+      continue;
+    }
+    if (chunk.length < BITRIX_DEPT_PAGE) break;
+    start += BITRIX_DEPT_PAGE;
   }
 
   return {
@@ -211,13 +224,14 @@ export async function syncEmployees(): Promise<{
     return { upserted: 0, skipped: 0, usersFetchedTotal, usersPagesFetched };
   }
 
-  const { data: deptRows, error: deptErr } = await supabase
-    .from("departments")
-    .select("id, bitrix_department_id");
-  if (deptErr) throw new Error(`Supabase departments select failed: ${deptErr.message}`);
+  const deptRows = await fetchAllByRange<{ id: string; bitrix_department_id: string }>({
+    pageSize: 500,
+    fetchPage: (from, to) =>
+      supabase.from("departments").select("id, bitrix_department_id").order("id", { ascending: true }).range(from, to)
+  });
 
   const deptIdByBitrixId = new Map<string, string>();
-  for (const r of deptRows ?? []) {
+  for (const r of deptRows) {
     if (r?.bitrix_department_id && r?.id) {
       deptIdByBitrixId.set(String(r.bitrix_department_id), String(r.id));
     }

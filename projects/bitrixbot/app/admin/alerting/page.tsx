@@ -1,5 +1,6 @@
 import { env } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
+import { fetchAllByRange } from "@/src/lib/supabase/fetch-all-by-range";
 import { getAlertingDashboardSummary } from "@/src/lib/bitrixbot/alerting-dashboard";
 import { getCallEventManagerDiagnostics } from "@/src/lib/bitrixbot/call-event-manager-diagnostics";
 import { getAlertingSettings } from "@/src/lib/bitrixbot/get-alerting-settings";
@@ -110,22 +111,17 @@ function mapHierarchyRow(r: HierDbRow): OrgHierarchyRow {
 
 async function fetchOrgHierarchyRows(): Promise<OrgHierarchyRow[]> {
   const supabase = createServiceRoleClient();
-  const all: HierDbRow[] = [];
-  let from = 0;
   const select =
     "id, manager_bitrix_user_id, manager_name, department_name, rop_bitrix_user_id, rop_name, department_director_bitrix_user_id, department_director_name, company_director_bitrix_user_id, company_director_name, resolved_at";
-  while (true) {
-    const { data, error } = await supabase
-      .from("org_resolved_hierarchy")
-      .select(select)
-      .order("manager_bitrix_user_id", { ascending: true })
-      .range(from, from + PAGE - 1);
-    if (error) throw new Error(error.message);
-    const chunk = (data ?? []) as HierDbRow[];
-    all.push(...chunk);
-    if (chunk.length < PAGE) break;
-    from += PAGE;
-  }
+  const all = await fetchAllByRange<HierDbRow>({
+    pageSize: PAGE,
+    fetchPage: (from, to) =>
+      supabase
+        .from("org_resolved_hierarchy")
+        .select(select)
+        .order("manager_bitrix_user_id", { ascending: true })
+        .range(from, to)
+  });
   return all.map(mapHierarchyRow);
 }
 
@@ -163,26 +159,22 @@ async function fetchOrgStructureSnapshot(): Promise<OrgStructureSnapshot> {
 
 async function fetchAlertNotificationRules(): Promise<AlertNotificationRuleRow[]> {
   const supabase = createServiceRoleClient();
-  const all: AlertNotificationRuleRow[] = [];
-  let from = 0;
-  while (true) {
-    const { data, error } = await supabase
-      .from("alert_notification_rules")
-      .select(
-        "id, name, enabled, sort_order, missed_count_threshold, no_callback_minutes, condition_operator, recipients, message_template"
-      )
-      .order("sort_order", { ascending: true })
-      .range(from, from + PAGE - 1);
-    if (error) {
-      console.warn("[admin/alerting] alert_notification_rules fetch failed", error.message);
-      return [];
-    }
-    const chunk = (data ?? []) as AlertNotificationRuleRow[];
-    all.push(...chunk);
-    if (chunk.length < PAGE) break;
-    from += PAGE;
+  try {
+    return await fetchAllByRange<AlertNotificationRuleRow>({
+      pageSize: PAGE,
+      fetchPage: (from, to) =>
+        supabase
+          .from("alert_notification_rules")
+          .select(
+            "id, name, enabled, sort_order, missed_count_threshold, no_callback_minutes, condition_operator, recipients, message_template"
+          )
+          .order("sort_order", { ascending: true })
+          .range(from, to)
+    });
+  } catch (e) {
+    console.warn("[admin/alerting] alert_notification_rules fetch failed", e);
+    return [];
   }
-  return all;
 }
 
 function hasResponsibleManagerInRecipients(recipients: unknown): boolean {

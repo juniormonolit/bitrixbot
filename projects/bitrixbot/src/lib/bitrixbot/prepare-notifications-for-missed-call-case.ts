@@ -128,9 +128,9 @@ async function loadAlertNotificationRules(
     );
     if (error) throw new Error(error.message);
     const chunk = (data ?? []) as AlertNotificationRuleRow[];
+    if (chunk.length === 0) break;
     all.push(...chunk);
-    if (chunk.length < RULES_PAGE) break;
-    from += RULES_PAGE;
+    from += chunk.length;
   }
   return all;
 }

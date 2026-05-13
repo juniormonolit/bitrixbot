@@ -695,12 +695,22 @@ export function AlertingConsole(props: {
               <div className="text-sm text-white/85">{props.summary.lastOrgResolvedAt ?? "нет данных"}</div>
             </Card>
             <Card title="Сотрудники (employees)">
+              <div className="text-[10px] text-white/45">Всего строк в public.employees</div>
               <div className="text-2xl font-semibold">{props.orgSnapshot.employeeCount}</div>
             </Card>
             <Card title="Строк в org_resolved_hierarchy">
+              <div className="text-[10px] text-white/45">После rebuild ≈ числу сотрудников с bitrix_user_id</div>
               <div className="text-2xl font-semibold">{props.orgSnapshot.hierarchyRowCount}</div>
             </Card>
           </div>
+          {props.orgSnapshot.employeeCount > 0 &&
+          props.orgSnapshot.hierarchyRowCount < props.orgSnapshot.employeeCount - 5 ? (
+            <div className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+              Строк в кеше иерархии ({props.orgSnapshot.hierarchyRowCount}) заметно меньше, чем сотрудников (
+              {props.orgSnapshot.employeeCount}). Запустите rebuild и проверьте лимиты PostgREST — в коде пагинация
+              исправлена (шаг по фактическому размеру chunk).
+            </div>
+          ) : null}
 
           <OrgHierarchyBrowser rows={props.orgSnapshot.hierarchyRows} stats={props.orgSnapshot.hierarchyStats} />
 
