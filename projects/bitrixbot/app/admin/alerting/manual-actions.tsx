@@ -60,7 +60,6 @@ function hasActionIssues(lastResult: unknown): boolean {
   if (!r) return false;
   if (r.issuesPresent === true) return true;
   if (typeof r.failedEvents === "number" && r.failedEvents > 0) return true;
-  if (Array.isArray(r.upsertFailures) && r.upsertFailures.length > 0) return true;
   return false;
 }
 
@@ -71,6 +70,14 @@ function getMissedCallsSummaryFromActionResult(
       processedEvents?: number;
       skippedEvents?: number;
       skippedReasons?: Record<string, number>;
+      recoverableUpsertErrors?: number;
+      dealEnrichment?: {
+        found: number;
+        notFound: number;
+        byActivity: number;
+        byPhone: number;
+        errors: number;
+      };
       failedEvents?: number;
       upsertFailures?: unknown[];
       employeeNotFound?: unknown[];
@@ -85,6 +92,8 @@ function getMissedCallsSummaryFromActionResult(
       processedEvents?: number;
       skippedEvents?: number;
       skippedReasons?: Record<string, number>;
+      recoverableUpsertErrors?: number;
+      dealEnrichment?: Record<string, number>;
     };
   };
   const direct = r.summary;
@@ -99,6 +108,14 @@ function getMissedCallsSummaryFromActionResult(
       processedEvents?: number;
       skippedEvents?: number;
       skippedReasons?: Record<string, number>;
+      recoverableUpsertErrors?: number;
+      dealEnrichment?: {
+        found: number;
+        notFound: number;
+        byActivity: number;
+        byPhone: number;
+        errors: number;
+      };
       failedEvents?: number;
       upsertFailures?: unknown[];
       employeeNotFound?: unknown[];
@@ -110,6 +127,14 @@ function getMissedCallsSummaryFromActionResult(
       processedEvents?: number;
       skippedEvents?: number;
       skippedReasons?: Record<string, number>;
+      recoverableUpsertErrors?: number;
+      dealEnrichment?: {
+        found: number;
+        notFound: number;
+        byActivity: number;
+        byPhone: number;
+        errors: number;
+      };
       failedEvents?: number;
       upsertFailures?: unknown[];
       employeeNotFound?: unknown[];
@@ -122,6 +147,14 @@ function getMissedCallsSummaryFromActionResult(
       processedEvents?: number;
       skippedEvents?: number;
       skippedReasons?: Record<string, number>;
+      recoverableUpsertErrors?: number;
+      dealEnrichment?: {
+        found: number;
+        notFound: number;
+        byActivity: number;
+        byPhone: number;
+        errors: number;
+      };
       failedEvents?: number;
       upsertFailures?: unknown[];
       employeeNotFound?: unknown[];
@@ -253,6 +286,18 @@ export function ManualActions({ debugSecret }: { debugSecret: string }) {
           Missed calls: processed={String(sum?.processedEvents ?? "—")}, skipped={String(sum?.skippedEvents ?? "—")}
           , skippedReasons=
           <code className="text-emerald-100/85">{JSON.stringify(sum?.skippedReasons ?? {})}</code>
+          {typeof sum?.recoverableUpsertErrors === "number" && sum.recoverableUpsertErrors > 0 ? (
+            <span>
+              , recoverableUpsertErrors=
+              <span className="text-amber-100/90">{String(sum.recoverableUpsertErrors)}</span>
+            </span>
+          ) : null}
+          {sum?.dealEnrichment ? (
+            <span>
+              , dealEnrichment=
+              <code className="text-sky-100/85">{JSON.stringify(sum.dealEnrichment)}</code>
+            </span>
+          ) : null}
         </div>
       ) : null}
 
@@ -261,7 +306,12 @@ export function ManualActions({ debugSecret }: { debugSecret: string }) {
           Запрос завершился с предупреждениями:{" "}
           <span className="font-medium">failedEvents={String(sum?.failedEvents ?? "—")}</span>
           {Array.isArray(sum?.upsertFailures) ? (
-            <span className="font-medium">, upsertFailures={sum?.upsertFailures.length}</span>
+            <span className="font-medium">
+              , upsertFailures={sum?.upsertFailures.length}
+              {typeof sum?.recoverableUpsertErrors === "number" && sum.recoverableUpsertErrors > 0
+                ? ` (retryable=${sum.recoverableUpsertErrors})`
+                : ""}
+            </span>
           ) : null}
           {Array.isArray(sum?.employeeNotFound) ? (
             <span className="font-medium">, employeeNotFound_groups={sum?.employeeNotFound.length}</span>

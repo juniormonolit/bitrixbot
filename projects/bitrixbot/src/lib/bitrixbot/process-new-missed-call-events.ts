@@ -4,6 +4,7 @@ import { withTimeout } from "@/src/lib/bitrixbot/async-timeout";
 import { prepareNotificationsForMissedCallCase } from "@/src/lib/bitrixbot/prepare-notifications-for-missed-call-case";
 import {
   upsertMissedCallCaseFromEvent,
+  type DealEnrichmentCallSnapshot,
   type UpsertMissedCallCaseResult
 } from "@/src/lib/bitrixbot/upsert-missed-call-case-from-event";
 
@@ -20,10 +21,7 @@ const DEFAULT_LIMIT = 100;
 /** During diagnostics: cap work per run (was 500). */
 const MAX_EFFECTIVE_LIMIT = 100;
 const MAX_CANDIDATE_FETCH = 500;
-/** Только upsert кейса + mark processing (без prepare notifications). */
-const CASE_UPSERT_TIMEOUT_MS = 12_000;
 const PREPARE_NOTIFICATIONS_TIMEOUT_MS = 4_500;
-
 export type EmployeeNotFoundAgg = {
   managerBitrixUserId: string | null;
   count: number;
@@ -38,10 +36,63 @@ export type UpsertFailureDiag = {
   phone: string | null;
   managerBitrixUserId: string | null;
   occurredAt: string | null;
-  timeoutMs: number;
   message: string;
   lastKnownStage: string;
+  /** true если сработал внешний timeout (событие помечено retryable_error). */
+  retryScheduled?: boolean;
 };
+
+export type DealEnrichmentSummary = {
+  /** События, где после enrich есть bitrix_deal_id. */
+  found: number;
+  /** Нормальный исход: сделку не удалось сопоставить. */
+  notFound: number;
+  /** Сделка найдена по CRM activity. */
+  byActivity: number;
+  /** Сделка найдена по телефону. */
+  byPhone: number;
+  /** Исключения / сбой Bitrix / persist. */
+  errors: number;
+};
+
+function bumpDealEnrichmentSummary(agg: DealEnrichmentSummary, snap: DealEnrichmentCallSnapshot) {
+  const err = snap.enrichmentError ?? "";
+  if (err.startsWith("enrichment_exception") || err.includes("activity_fetch_failed")) {
+    agg.errors++;
+    return;
+  }
+  if (snap.hasDealId) {
+    agg.found++;
+    if (snap.source === "crm_activity") agg.byActivity++;
+    else if (snap.source === "phone_lookup") agg.byPhone++;
+    return;
+  }
+  agg.notFound++;
+}
+
+async function markProcessingRetryableByCallEventId(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  callEventId: string,
+  message: string
+) {
+  const { data, error } = await supabase
+    .from("call_event_case_processing")
+    .select("id, processing_attempts")
+    .eq("call_event_id", callEventId)
+    .maybeSingle();
+  if (error || !data) return;
+  const attempts = ((data as { processing_attempts?: number }).processing_attempts ?? 0) + 1;
+  const { error: updErr } = await supabase
+    .from("call_event_case_processing")
+    .update({
+      processing_status: "retryable_error",
+      error_message: message.slice(0, 2000),
+      processed_at: null,
+      processing_attempts: attempts
+    })
+    .eq("id", (data as { id: string }).id);
+  if (updErr) console.error(`${LOG} mark_retryable_failed`, { callEventId, message: updErr.message });
+}
 
 function clampEffectiveLimit(limit: number | undefined): number {
   const raw =
@@ -120,21 +171,41 @@ export type ProcessNewMissedCallEventsSummary = {
   warnings: string[];
   /** Сгруппировано по manager Bitrix id (без дублей в сотнях строк). */
   employeeNotFound: EmployeeNotFoundAgg[];
-  /** Таймауты / ошибки обёртки upsertMissedCallCaseFromEvent. */
+  /** Ошибки upsert (в т.ч. опциональный внешний timeout, см. MISSED_CALL_UPSERT_TIMEOUT_MS). */
   upsertFailures: UpsertFailureDiag[];
+  /** События, помеченные retryable_error после timeout (не failedEvents). */
+  recoverableUpsertErrors: number;
+  /** Агрегат обогащения сделки по обработанным событиям (не warning). */
+  dealEnrichment: DealEnrichmentSummary;
   /** Есть ли что показать как warning в UI (таймауты, failedEvents, missing employees). */
   issuesPresent: boolean;
   /** Rows returned from the missed-call candidate query (bounded batch). */
   fetchedCandidateEvents: number;
-  /** Among fetched candidates, how many already have `call_event_case_processing`. */
+  /** Кандидаты с терминальным processing (processed / skipped / failed). */
   alreadyProcessedCandidates: number;
-  /** Among fetched candidates, how many are not in processing yet (before applying work limit). */
+  /** Кандидаты без терминального processing (включая pending / retryable_error). */
   unprocessedCandidates: number;
   /** Limit after clamp [1, 100]; this many events are passed to `upsertMissedCallCaseFromEvent` at most. */
   effectiveLimit: number;
   /** Сколько событий отфильтровано helper’ом по причине (см. bucketSkipReason). */
   skippedReasons: Record<string, number>;
 };
+
+const emptyDealEnrichment = (): DealEnrichmentSummary => ({
+  found: 0,
+  notFound: 0,
+  byActivity: 0,
+  byPhone: 0,
+  errors: 0
+});
+
+function parseUpsertTimeoutMs(): number | null {
+  const raw = process.env.MISSED_CALL_UPSERT_TIMEOUT_MS;
+  if (raw == null || String(raw).trim() === "") return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.max(1000, Math.floor(n));
+}
 
 export async function processNewMissedCallEvents(
   limit: number = DEFAULT_LIMIT
@@ -181,6 +252,8 @@ export async function processNewMissedCallEvents(
       warnings,
       employeeNotFound: [],
       upsertFailures: [],
+      recoverableUpsertErrors: 0,
+      dealEnrichment: emptyDealEnrichment(),
       issuesPresent: false,
       fetchedCandidateEvents: 0,
       alreadyProcessedCandidates: 0,
@@ -194,25 +267,28 @@ export async function processNewMissedCallEvents(
 
   const ids = rows.map((r) => r.id);
   console.log(`${LOG} before processing rows query`, { idCount: ids.length });
-  const { data: processedRows, error: procErr } = await supabase
+  const { data: processingRows, error: procErr } = await supabase
     .from("call_event_case_processing")
-    .select("call_event_id")
+    .select("call_event_id, processing_status")
     .in("call_event_id", ids);
   if (procErr) {
     console.error(`${LOG} processing rows error`, procErr);
     formatSupabaseError("call_event_case_processing.select", procErr);
   }
   console.log(`${LOG} after processing rows`, {
-    count: (processedRows ?? []).length,
+    count: (processingRows ?? []).length,
     error: null
   });
 
-  const already = new Set<string>(
-    (processedRows ?? []).map((r) => (r as { call_event_id: string }).call_event_id)
+  const terminalStatuses = new Set(["processed", "skipped", "failed"]);
+  const terminalByCallEvent = new Set(
+    (processingRows ?? [])
+      .filter((r) => terminalStatuses.has((r as { processing_status: string }).processing_status))
+      .map((r) => (r as { call_event_id: string }).call_event_id)
   );
 
-  const alreadyProcessedCandidates = rows.filter((r) => already.has(r.id)).length;
-  const unprocessedOrdered = rows.filter((r) => !already.has(r.id));
+  const alreadyProcessedCandidates = rows.filter((r) => terminalByCallEvent.has(r.id)).length;
+  const unprocessedOrdered = rows.filter((r) => !terminalByCallEvent.has(r.id));
   const unprocessedCandidates = unprocessedOrdered.length;
   const toProcess = unprocessedOrdered.slice(0, effectiveLimit);
 
@@ -231,6 +307,10 @@ export async function processNewMissedCallEvents(
   let updatedCases = 0;
   let createdDeliveries = 0;
   const skippedReasons: Record<string, number> = {};
+  const dealEnrichment = emptyDealEnrichment();
+  let recoverableUpsertErrors = 0;
+
+  const upsertTimeoutMs = parseUpsertTimeoutMs();
 
   for (const ev of toProcess) {
     console.log(`${LOG} before upsert`, {
@@ -238,33 +318,44 @@ export async function processNewMissedCallEvents(
       occurred_at: ev.occurred_at,
       phone_normalized: ev.phone_normalized,
       manager_bitrix_user_id: ev.manager_bitrix_user_id,
-      caseUpsertTimeoutMs: CASE_UPSERT_TIMEOUT_MS,
+      upsertTimeoutMs: upsertTimeoutMs ?? "off",
       prepareNotificationsTimeoutMs: PREPARE_NOTIFICATIONS_TIMEOUT_MS
     });
 
     const diagCtx = { lastStage: "queued" };
     let res: Awaited<ReturnType<typeof upsertMissedCallCaseFromEvent>>;
     try {
-      res = await withTimeout(
-        upsertMissedCallCaseFromEvent(ev.id, diagCtx),
-        CASE_UPSERT_TIMEOUT_MS,
-        `upsert:${ev.id}`
-      );
+      res =
+        upsertTimeoutMs != null
+          ? await withTimeout(
+              upsertMissedCallCaseFromEvent(ev.id, diagCtx),
+              upsertTimeoutMs,
+              `upsert:${ev.id}`
+            )
+          : await upsertMissedCallCaseFromEvent(ev.id, diagCtx);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      failedEvents++;
+      const isTimeout = /timeout after \d+ms/i.test(msg);
       const failure: UpsertFailureDiag = {
         callEventId: ev.id,
         phone: ev.phone_normalized,
         managerBitrixUserId: ev.manager_bitrix_user_id,
         occurredAt: ev.occurred_at,
-        timeoutMs: CASE_UPSERT_TIMEOUT_MS,
         message: msg,
-        lastKnownStage: diagCtx.lastStage
+        lastKnownStage: diagCtx.lastStage,
+        retryScheduled: isTimeout
       };
       upsertFailures.push(failure);
-      warnings.push(`upsert_timeout_or_error:${JSON.stringify(failure)}`);
-      console.error(`${LOG} upsert threw`, failure);
+      if (isTimeout) {
+        recoverableUpsertErrors++;
+        await markProcessingRetryableByCallEventId(supabase, ev.id, msg);
+        warnings.push(`upsert_timeout_retryable:${JSON.stringify(failure)}`);
+        console.error(`${LOG} upsert timeout (retryable)`, failure);
+      } else {
+        failedEvents++;
+        warnings.push(`upsert_error:${JSON.stringify(failure)}`);
+        console.error(`${LOG} upsert threw`, failure);
+      }
       continue;
     }
 
@@ -275,6 +366,8 @@ export async function processNewMissedCallEvents(
       if (res.createdCase) createdCases++;
       if (res.updatedCase) updatedCases++;
       warnings.push(...res.warnings);
+
+      if (res.dealEnrichment) bumpDealEnrichmentSummary(dealEnrichment, res.dealEnrichment);
 
       let deliveryFallbackUsed = false;
       if (res.caseId) {
@@ -324,7 +417,11 @@ export async function processNewMissedCallEvents(
 
   const employeeNotFound = [...employeeNotFoundMap.values()].sort((a, b) => b.count - a.count);
   const issuesPresent =
-    failedEvents > 0 || upsertFailures.length > 0 || employeeNotFound.length > 0;
+    failedEvents > 0 ||
+    recoverableUpsertErrors > 0 ||
+    upsertFailures.some((f) => f.retryScheduled !== true) ||
+    employeeNotFound.length > 0 ||
+    dealEnrichment.errors > 0;
 
   const summary: ProcessNewMissedCallEventsSummary = {
     scannedEvents: toProcess.length,
@@ -337,6 +434,8 @@ export async function processNewMissedCallEvents(
     warnings,
     employeeNotFound,
     upsertFailures,
+    recoverableUpsertErrors,
+    dealEnrichment,
     issuesPresent,
     fetchedCandidateEvents,
     alreadyProcessedCandidates,

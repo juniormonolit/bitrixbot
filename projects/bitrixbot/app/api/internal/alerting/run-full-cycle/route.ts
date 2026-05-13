@@ -18,11 +18,7 @@ export async function POST(req: Request) {
   const mc = summary.missedCalls;
   if (mc) {
     if (!mc.ok) issuesPresent = true;
-    else if (
-      mc.result.failedEvents > 0 ||
-      mc.result.upsertFailures.length > 0 ||
-      mc.result.issuesPresent
-    ) {
+    else if (mc.result.issuesPresent || mc.result.failedEvents > 0) {
       issuesPresent = true;
     }
   }

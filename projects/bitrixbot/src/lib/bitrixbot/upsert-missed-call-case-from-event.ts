@@ -43,9 +43,16 @@ type CallEventRow = {
 
 type ProcessingRow = {
   id: string;
-  processing_status: "pending" | "processed" | "skipped" | "failed";
+  processing_status: "pending" | "processed" | "skipped" | "failed" | "retryable_error";
   case_id: string | null;
   processing_attempts: number;
+};
+
+/** Снимок обогащения сделки после pipeline (для summary.dealEnrichment, не warnings). */
+export type DealEnrichmentCallSnapshot = {
+  hasDealId: boolean;
+  source: string | null;
+  enrichmentError: string | null;
 };
 
 export type UpsertMissedCallCaseResult = {
@@ -57,6 +64,8 @@ export type UpsertMissedCallCaseResult = {
   createdDeliveries: number;
   warnings: string[];
   error: string | null;
+  /** Состояние call_event после enrich (только для status=processed). */
+  dealEnrichment?: DealEnrichmentCallSnapshot;
   /** Причина раннего skip по фильтру входящих пропущенных (для агрегата skippedReasons). */
   filterSkipReason?: string | null;
   /** Одно событие без сотрудника в таблице employees — для агрегата в process-new. */
@@ -82,32 +91,39 @@ async function getOrCreateProcessingRow(
   supabase: ReturnType<typeof createServiceRoleClient>,
   callEvent: CallEventRow
 ): Promise<ProcessingRow> {
-  const { data: existing, error: selErr } = await supabase
-    .from("call_event_case_processing")
-    .select("id, processing_status, case_id, processing_attempts")
-    .eq("call_event_id", callEvent.id)
-    .maybeSingle();
-  if (selErr) supabaseErr("call_event_case_processing.select(existing)", selErr);
-  if (existing) return existing as ProcessingRow;
-
+  const insertPayload = {
+    call_event_id: callEvent.id,
+    bitrix_call_id: callEvent.bitrix_call_id,
+    processing_status: "pending" as const
+  };
   const { data: inserted, error: insErr } = await supabase
     .from("call_event_case_processing")
-    .insert({
-      call_event_id: callEvent.id,
-      bitrix_call_id: callEvent.bitrix_call_id,
-      processing_status: "pending"
-    })
+    .insert(insertPayload)
     .select("id, processing_status, case_id, processing_attempts")
-    .single();
+    .maybeSingle();
+
+  if (!insErr && inserted) return inserted as ProcessingRow;
+
+  const code = (insErr as { code?: string } | null)?.code;
+  if (code === "23505") {
+    const { data: existing, error: selErr } = await supabase
+      .from("call_event_case_processing")
+      .select("id, processing_status, case_id, processing_attempts")
+      .eq("call_event_id", callEvent.id)
+      .single();
+    if (selErr) supabaseErr("call_event_case_processing.select(after_duplicate)", selErr);
+    return existing as ProcessingRow;
+  }
+
   if (insErr) supabaseErr("call_event_case_processing.insert", insErr);
-  return inserted as ProcessingRow;
+  throw new Error("call_event_case_processing.insert: empty row without error");
 }
 
 async function markProcessing(
   supabase: ReturnType<typeof createServiceRoleClient>,
   rowId: string,
   patch: Partial<{
-    processing_status: "pending" | "processed" | "skipped" | "failed";
+    processing_status: "pending" | "processed" | "skipped" | "failed" | "retryable_error";
     case_id: string | null;
     processed_at: string | null;
     error_message: string | null;
@@ -196,7 +212,11 @@ export async function upsertMissedCallCaseFromEvent(
     const processing = await getOrCreateProcessingRow(supabase, ce);
     processingRowId = processing.id;
 
-    if (processing.processing_status === "processed" || processing.processing_status === "skipped") {
+    if (
+      processing.processing_status === "processed" ||
+      processing.processing_status === "skipped" ||
+      processing.processing_status === "failed"
+    ) {
       return {
         callEventId,
         status: "noop",
@@ -235,11 +255,6 @@ export async function upsertMissedCallCaseFromEvent(
       };
     }
 
-    if (!ce.phone_normalized) {
-      warnings.push("phone_normalized_missing");
-    }
-
-    const beforeEnrichDealId = ce.bitrix_deal_id?.trim() || null;
     const ceEnriched = await enrichCallEventDealPipeline(supabase, {
       id: ce.id,
       bitrix_deal_id: ce.bitrix_deal_id,
@@ -255,17 +270,12 @@ export async function upsertMissedCallCaseFromEvent(
 
     const ctx = extractCallContext(mergedCe);
 
-    warnings.push(
-      `deal_pipeline:${JSON.stringify({
-        call_event_id: ce.id,
-        crm_activity_id: ce.crm_activity_id ?? null,
-        before_deal_id: beforeEnrichDealId,
-        after_deal_id: mergedCe.bitrix_deal_id ?? null,
-        deal_url: mergedCe.deal_url ?? null,
-        deal_enrichment_error: mergedCe.deal_enrichment_error ?? null,
-        deal_enrichment_source: mergedCe.deal_enrichment_source ?? null
-      })}`
-    );
+    const dealEnrichment: DealEnrichmentCallSnapshot = {
+      hasDealId: Boolean(mergedCe.bitrix_deal_id?.trim()),
+      source: mergedCe.deal_enrichment_source?.trim() ?? null,
+      enrichmentError: mergedCe.deal_enrichment_error?.trim() ?? null
+    };
+
     if (!ctx.phoneNormalized) warnings.push("phone_normalized_missing");
 
     const phoneNorm = ctx.phoneNormalized ?? ce.phone_normalized ?? "";
@@ -297,9 +307,6 @@ export async function upsertMissedCallCaseFromEvent(
         lookupCandidates: employeeInfo.lookupCandidates,
         rawPayloadTopKeys: uniqKeys
       };
-      warnings.push(
-        `employee_not_found:manager_bitrix_user_id=${employeeNotFoundHit.managerBitrixUserId ?? "null"},call_event_id=${employeeNotFoundHit.callEventId},phone=${employeeNotFoundHit.phone ?? "null"},occurred_at=${employeeNotFoundHit.occurredAt},found_in_employees=false,found_in_hierarchy_cache=${employeeNotFoundHit.foundInHierarchyCache},lookup_candidates=${employeeNotFoundHit.lookupCandidates.join("|")},employees_table=public.employees`
-      );
     }
     if (!phoneNorm) {
       await markProcessing(supabase, processing.id, {
@@ -416,15 +423,6 @@ export async function upsertMissedCallCaseFromEvent(
       console.log(
         `[missed-call-case] deal_fields caseId=${caseId} dealId=${nextDealId ?? "null"} dealUrl=${nextDealUrl ?? "null"} dealTitle=${nextDealTitle ?? "null"} source=${nextDealEnrichmentSource ?? "null"}`
       );
-      warnings.push(
-        `deal_case_after_upsert:${JSON.stringify({
-          case_id: caseId,
-          deal_id: nextDealId,
-          deal_url: nextDealUrl,
-          deal_title: nextDealTitle,
-          deal_enrichment_source: nextDealEnrichmentSource
-        })}`
-      );
     } else {
       const dealUrl =
         normalizeStoredDealUrl(mergedCe.deal_url) ||
@@ -474,15 +472,6 @@ export async function upsertMissedCallCaseFromEvent(
       console.log(
         `[missed-call-case] deal_fields caseId=${caseId} dealId=${ctx.dealId ?? "null"} dealUrl=${dealUrl || "null"} dealTitle=${mergedCe.deal_title ?? "null"} source=${mergedCe.deal_enrichment_source ?? "null"}`
       );
-      warnings.push(
-        `deal_case_after_upsert:${JSON.stringify({
-          case_id: caseId,
-          deal_id: ctx.dealId,
-          deal_url: dealUrl || null,
-          deal_title: mergedCe.deal_title,
-          deal_enrichment_source: mergedCe.deal_enrichment_source
-        })}`
-      );
     }
 
     mark("call_event_case_processing_mark_processed");
@@ -503,6 +492,7 @@ export async function upsertMissedCallCaseFromEvent(
       createdDeliveries: 0,
       warnings,
       error: null,
+      dealEnrichment,
       ...(employeeNotFoundHit ? { employeeNotFoundHit } : {})
     };
   } catch (e) {
