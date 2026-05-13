@@ -10,4 +10,8 @@ export function isMissedInboundCallEvent(callEvent: CallEventLike): boolean {
   return evaluateMissedInboundCustomerCall(callEvent).ok;
 }
 
-export { evaluateMissedInboundCustomerCall, isMissedInboundCustomerCall } from "@/src/lib/bitrixbot/missed-inbound-customer-call";
+export {
+  evaluateMissedInboundCustomerCall,
+  filterSkipReasonLabel,
+  isMissedInboundCustomerCall
+} from "@/src/lib/bitrixbot/missed-inbound-customer-call";

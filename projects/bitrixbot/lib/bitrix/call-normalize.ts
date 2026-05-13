@@ -90,6 +90,7 @@ export function normalizeBitrixCallEvent(
 
   const status = computeStatus(data);
   const durationSeconds = getNumber(data.CALL_DURATION);
+  // Bitrix Voximplant CALL_TYPE: "1" = исходящий (outbound), "2" = входящий (inbound).
   const callTypeRaw = getString(data.CALL_TYPE);
   const failedCode = getString(data.CALL_FAILED_CODE);
   const failedReason = getString(data.CALL_FAILED_REASON);

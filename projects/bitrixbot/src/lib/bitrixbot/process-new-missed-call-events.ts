@@ -101,13 +101,15 @@ function clampEffectiveLimit(limit: number | undefined): number {
   return Math.min(MAX_EFFECTIVE_LIMIT, raw);
 }
 
-/** Агрегат для summary: укрупнённые причины filter skip. */
+/** Агрегат для summary: детальные причины filter skip (ключи без префикса skip_). */
 function bucketSkipReason(reason: string): string {
   switch (reason) {
     case "skip_outgoing_call":
-    case "skip_not_inbound":
-    case "skip_call_type_3":
+      return "outgoing_call";
     case "skip_unknown_call_type":
+    case "skip_call_type_3":
+      return "unknown_call_type";
+    case "skip_not_inbound":
       return "not_inbound";
     case "skip_call_event_not_final":
       return "not_final_event";

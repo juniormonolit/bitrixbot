@@ -5,7 +5,10 @@ import {
   normalizeStoredDealUrl
 } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
 import { extractCallContext } from "@/src/lib/bitrixbot/extract-call-context";
-import { evaluateMissedInboundCustomerCall } from "@/src/lib/bitrixbot/missed-inbound-customer-call";
+import {
+  evaluateMissedInboundCustomerCall,
+  filterSkipReasonLabel
+} from "@/src/lib/bitrixbot/missed-inbound-customer-call";
 import { lookupEmployeeByBitrixUserId } from "@/src/lib/bitrixbot/employee-lookup";
 import { safeJsonTopKeys, safeNestedKeys } from "@/src/lib/bitrixbot/payload-diag";
 import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
@@ -28,6 +31,7 @@ type CallEventRow = {
   occurred_at: string;
   status: string;
   call_direction: string | null;
+  call_type_raw: string | null;
   phone_normalized: string | null;
   manager_bitrix_user_id: string | null;
   bitrix_deal_id: string | null;
@@ -217,7 +221,7 @@ export async function upsertMissedCallCaseFromEvent(
     const { data: callEvent, error: callErr } = await supabase
       .from("call_events")
       .select(
-        "id, occurred_at, status, call_direction, phone_normalized, manager_bitrix_user_id, bitrix_deal_id, crm_activity_id, bitrix_call_id, raw_payload, deal_title, deal_url, deal_enriched_at, deal_enrichment_error, deal_enrichment_source"
+        "id, occurred_at, status, call_direction, call_type_raw, phone_normalized, manager_bitrix_user_id, bitrix_deal_id, crm_activity_id, bitrix_call_id, raw_payload, deal_title, deal_url, deal_enriched_at, deal_enrichment_error, deal_enrichment_source"
       )
       .eq("id", callEventId)
       .single();
@@ -257,8 +261,9 @@ export async function upsertMissedCallCaseFromEvent(
 
     const inboundEval = evaluateMissedInboundCustomerCall(ce);
     if (!inboundEval.ok) {
+      const phoneLog = ce.phone_normalized?.trim() ?? "";
       console.log(
-        `[missed-call-filter] skip callEventId=${ce.id} reason=${inboundEval.reason} callType=${inboundEval.callType ?? ""} event=${inboundEval.event ?? ""}`
+        `[missed-call-filter] skip callEventId=${ce.id} reason=${filterSkipReasonLabel(inboundEval.reason)} callType=${inboundEval.callType ?? ""} phone=${phoneLog} event=${inboundEval.event ?? ""}`
       );
       await markProcessing(supabase, processing.id, {
         processing_status: "skipped",

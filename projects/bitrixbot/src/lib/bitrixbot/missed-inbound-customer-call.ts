@@ -63,7 +63,34 @@ export type CallEventForInboundFilter = {
   raw_payload: unknown;
   phone_normalized?: string | null;
   manager_bitrix_user_id?: string | null;
+  /** From call_events.call_type_raw — fallback if payload omits CALL_TYPE. */
+  call_type_raw?: string | null;
+  /** From call_events.call_direction — secondary guard for outbound (same ingest as CALL_TYPE). */
+  call_direction?: string | null;
 };
+
+/**
+ * Resolve Bitrix CALL_TYPE: payload first, then DB column (see normalizeBitrixCallEvent ingest).
+ *
+ * Bitrix Voximplant:
+ * - CALL_TYPE "1" = outbound (исходящий)
+ * - CALL_TYPE "2" = inbound (входящий)
+ */
+function resolveCallTypeForFilter(event: CallEventForInboundFilter): string {
+  const root = getObj(event.raw_payload);
+  const data = getObj(root.data ?? root.DATA);
+  const fromPayload = getString(data.CALL_TYPE);
+  if (fromPayload) return fromPayload;
+  const col = event.call_type_raw?.trim();
+  return col ?? "";
+}
+
+/**
+ * Человекочитаемая причина для логов (без префикса skip_).
+ */
+export function filterSkipReasonLabel(reason: string): string {
+  return reason.replace(/^skip_/, "");
+}
 
 /**
  * Bitrix Voximplant telephony (typical mapping):
@@ -77,7 +104,16 @@ export function evaluateMissedInboundCustomerCall(callEvent: CallEventForInbound
   }
 
   const data = getObj(root.data ?? root.DATA);
-  const callType = getString(data.CALL_TYPE);
+  const callType = resolveCallTypeForFilter(callEvent).trim();
+
+  if (callEvent.call_direction === "outbound") {
+    return {
+      ok: false,
+      reason: "skip_outgoing_call",
+      callType: callType || null,
+      event: eventName
+    };
+  }
 
   if (callType === "1") {
     return { ok: false, reason: "skip_outgoing_call", callType, event: eventName };
@@ -86,7 +122,7 @@ export function evaluateMissedInboundCustomerCall(callEvent: CallEventForInbound
     return { ok: false, reason: "skip_call_type_3", callType, event: eventName };
   }
   if (callType !== "2") {
-    return { ok: false, reason: "skip_unknown_call_type", callType, event: eventName };
+    return { ok: false, reason: "skip_unknown_call_type", callType: callType || null, event: eventName };
   }
 
   if (callEvent.status !== "missed") {
