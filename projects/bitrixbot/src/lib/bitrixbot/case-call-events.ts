@@ -16,6 +16,8 @@ export type CaseCallEventRow = {
   status: string | null;
   call_direction: string | null;
   call_type_raw: string | null;
+  call_duration_seconds: number | null;
+  failed_code: string | null;
   crm_activity_id: string | null;
   bitrix_deal_id: string | null;
   phone_normalized: string | null;
@@ -29,7 +31,7 @@ export type CaseCallEventRow = {
 };
 
 const SELECT_FIELDS =
-  "id, status, call_direction, call_type_raw, crm_activity_id, bitrix_deal_id, phone_normalized, deal_url, deal_title, deal_enriched_at, deal_enrichment_error, deal_enrichment_source, raw_payload, occurred_at";
+  "id, status, call_direction, call_type_raw, call_duration_seconds, failed_code, crm_activity_id, bitrix_deal_id, phone_normalized, deal_url, deal_title, deal_enriched_at, deal_enrichment_error, deal_enrichment_source, raw_payload, occurred_at";
 
 /** Load call_events linked to a missed_call_case (context ids + recent same phone). */
 export async function loadCallEventsForCase(

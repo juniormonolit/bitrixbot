@@ -34,6 +34,8 @@ type CallEventRow = {
   call_type_raw: string | null;
   phone_normalized: string | null;
   manager_bitrix_user_id: string | null;
+  call_duration_seconds: number | null;
+  failed_code: string | null;
   bitrix_deal_id: string | null;
   crm_activity_id: string | null;
   bitrix_call_id: string | null;
@@ -221,7 +223,7 @@ export async function upsertMissedCallCaseFromEvent(
     const { data: callEvent, error: callErr } = await supabase
       .from("call_events")
       .select(
-        "id, occurred_at, status, call_direction, call_type_raw, phone_normalized, manager_bitrix_user_id, bitrix_deal_id, crm_activity_id, bitrix_call_id, raw_payload, deal_title, deal_url, deal_enriched_at, deal_enrichment_error, deal_enrichment_source"
+        "id, occurred_at, status, call_direction, call_type_raw, phone_normalized, manager_bitrix_user_id, call_duration_seconds, failed_code, bitrix_deal_id, crm_activity_id, bitrix_call_id, raw_payload, deal_title, deal_url, deal_enriched_at, deal_enrichment_error, deal_enrichment_source"
       )
       .eq("id", callEventId)
       .single();
@@ -262,8 +264,9 @@ export async function upsertMissedCallCaseFromEvent(
     const inboundEval = evaluateMissedInboundCustomerCall(ce);
     if (!inboundEval.ok) {
       const phoneLog = ce.phone_normalized?.trim() ?? "";
+      const md = inboundEval.missedDiag;
       console.log(
-        `[missed-call-filter] skip reason=${filterSkipReasonLabel(inboundEval.reason)} callEventId=${ce.id} callType=${inboundEval.callType ?? ""} direction=${ce.call_direction ?? ""} event=${inboundEval.event ?? ""} phone=${phoneLog} case=none`
+        `[missed-call-filter] skip reason=${filterSkipReasonLabel(inboundEval.reason)} callEventId=${ce.id} callType=${inboundEval.callType ?? ""} direction=${ce.call_direction ?? ""} status=${md?.dbStatus ?? ce.status} duration=${md?.durationPayload ?? ""}/${md?.durationColumn ?? ""} failedCode=${md?.failedCodePayload ?? ""}/${md?.failedCodeColumn ?? ""} callStatus=${md?.callStatusTokens ?? ""} event=${inboundEval.event ?? ""} phone=${phoneLog} case=none`
       );
       await markProcessing(supabase, processing.id, {
         processing_status: "skipped",

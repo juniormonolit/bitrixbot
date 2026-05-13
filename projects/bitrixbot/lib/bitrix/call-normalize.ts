@@ -1,4 +1,5 @@
 import { normalizePhoneForAnalytics } from "@/lib/bitrix/phone-normalize";
+import { computeVoximplantStoredStatus } from "@/src/lib/bitrixbot/voximplant-inbound-missed";
 
 type JsonObject = Record<string, unknown>;
 
@@ -48,13 +49,7 @@ function getNumber(value: unknown): number | null {
 }
 
 function computeStatus(data: JsonObject): "missed" | "success" | "other" {
-  const duration = getNumber(data.CALL_DURATION);
-  if (duration !== null && duration > 0) return "success";
-
-  const failedCodeStr = getString(data.CALL_FAILED_CODE);
-  if (failedCodeStr && failedCodeStr !== "0") return "missed";
-
-  return "other";
+  return computeVoximplantStoredStatus(data);
 }
 
 export function normalizeBitrixCallEvent(

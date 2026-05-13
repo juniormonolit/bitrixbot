@@ -115,6 +115,9 @@ function bucketSkipReason(reason: string): string {
       return "not_final_event";
     case "skip_not_missed":
     case "skip_not_missed_status":
+    case "skip_not_missed_positive_duration_column":
+    case "skip_not_missed_answered_or_completed_payload":
+    case "skip_not_missed_strict_payload":
       return "not_missed";
     case "skip_missing_phone":
     case "skip_phone_same_as_portal":

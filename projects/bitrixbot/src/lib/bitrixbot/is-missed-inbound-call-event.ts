@@ -13,6 +13,7 @@ export function isMissedInboundCallEvent(callEvent: CallEventLike): boolean {
 export {
   evaluateMissedInboundCustomerCall,
   filterSkipReasonLabel,
+  isActuallyMissedInboundCallEvent,
   isMissedInboundCustomerCall
 } from "@/src/lib/bitrixbot/missed-inbound-customer-call";
 export { callEventHasOutboundSignals, resolveCallTypeDigits } from "@/src/lib/bitrixbot/call-event-outbound";

@@ -4,6 +4,7 @@ import { createServiceRoleClient } from "@/lib/supabase/server";
 import { loadCallEventsForCase } from "@/src/lib/bitrixbot/case-call-events";
 import { redactSecretsForDebug } from "@/src/lib/bitrixbot/redact-webhook-payload";
 import { normalizeStoredDealUrl } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
+import { voximplantPayloadSummary } from "@/src/lib/bitrixbot/voximplant-inbound-missed";
 
 function isAuthorized(req: Request): boolean {
   const header = req.headers.get("x-debug-secret") ?? "";
@@ -73,6 +74,9 @@ export async function GET(req: Request) {
     deal_enrichment_error: ev.deal_enrichment_error,
     deal_enrichment_source: ev.deal_enrichment_source,
     occurred_at: ev.occurred_at,
+    call_duration_seconds: ev.call_duration_seconds ?? null,
+    failed_code: ev.failed_code ?? null,
+    payload_summary: voximplantPayloadSummary(ev.raw_payload),
     raw_payload_safe: redactSecretsForDebug(ev.raw_payload)
   }));
 

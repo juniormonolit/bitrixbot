@@ -1,4 +1,11 @@
 import { callEventHasOutboundSignals, resolveCallTypeDigits } from "@/src/lib/bitrixbot/call-event-outbound";
+import {
+  buildMissedDiagSnapshot,
+  extractVoximplantDataPayload,
+  isStrictlyMissedInboundPayload,
+  payloadIndicatesInboundCallWasAnsweredOrCompleted,
+  type MissedDiagSnapshot
+} from "@/src/lib/bitrixbot/voximplant-inbound-missed";
 
 type JsonObject = Record<string, unknown>;
 
@@ -16,28 +23,8 @@ function getString(value: unknown): string | null {
   return null;
 }
 
-function getNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const v = value.trim();
-    if (!v) return null;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-}
-
 function digitsOnly(value: string): string {
   return value.replace(/\D/g, "");
-}
-
-/** Same missed heuristic as `computeStatus` in call-normalize (no answer / failed before connect). */
-function isMissedCallPayload(data: JsonObject): boolean {
-  const duration = getNumber(data.CALL_DURATION);
-  if (duration !== null && duration > 0) return false;
-  const failed = getString(data.CALL_FAILED_CODE);
-  if (failed && failed !== "0") return true;
-  return false;
 }
 
 function isLikelyInternalOrAppPhone(phone: string): boolean {
@@ -57,6 +44,7 @@ export type MissedInboundCustomerCallEval =
       reason: string;
       callType?: string | null;
       event?: string | null;
+      missedDiag?: MissedDiagSnapshot;
     };
 
 export type CallEventForInboundFilter = {
@@ -69,6 +57,8 @@ export type CallEventForInboundFilter = {
   call_type_raw?: string | null;
   /** From call_events.call_direction — secondary guard for outbound (same ingest as CALL_TYPE). */
   call_direction?: string | null;
+  call_duration_seconds?: number | null;
+  failed_code?: string | null;
 };
 
 /**
@@ -90,6 +80,12 @@ export function evaluateMissedInboundCustomerCall(callEvent: CallEventForInbound
   }
 
   const data = getObj(root.data ?? root.DATA);
+  const missedDiag = buildMissedDiagSnapshot({
+    status: callEvent.status,
+    call_duration_seconds: callEvent.call_duration_seconds,
+    failed_code: callEvent.failed_code,
+    raw_payload: callEvent.raw_payload
+  });
 
   if (callEventHasOutboundSignals(callEvent)) {
     const ct = resolveCallTypeDigits(callEvent).trim();
@@ -97,25 +93,65 @@ export function evaluateMissedInboundCustomerCall(callEvent: CallEventForInbound
       ok: false,
       reason: "skip_outgoing_call",
       callType: ct || callEvent.call_type_raw?.trim() || null,
-      event: eventName
+      event: eventName,
+      missedDiag
     };
   }
 
   const callType = resolveCallTypeDigits(callEvent).trim();
 
   if (callType === "3") {
-    return { ok: false, reason: "skip_call_type_3", callType, event: eventName };
+    return { ok: false, reason: "skip_call_type_3", callType, event: eventName, missedDiag };
   }
   if (callType !== "2") {
-    return { ok: false, reason: "skip_unknown_call_type", callType: callType || null, event: eventName };
+    return {
+      ok: false,
+      reason: "skip_unknown_call_type",
+      callType: callType || null,
+      event: eventName,
+      missedDiag
+    };
+  }
+
+  const colDur = callEvent.call_duration_seconds;
+  if (typeof colDur === "number" && Number.isFinite(colDur) && colDur > 0) {
+    return {
+      ok: false,
+      reason: "skip_not_missed_positive_duration_column",
+      callType,
+      event: eventName,
+      missedDiag
+    };
+  }
+
+  if (payloadIndicatesInboundCallWasAnsweredOrCompleted(data)) {
+    return {
+      ok: false,
+      reason: "skip_not_missed_answered_or_completed_payload",
+      callType,
+      event: eventName,
+      missedDiag
+    };
   }
 
   if (callEvent.status !== "missed") {
-    return { ok: false, reason: "skip_not_missed_status", callType, event: eventName };
+    return {
+      ok: false,
+      reason: "skip_not_missed_status",
+      callType,
+      event: eventName,
+      missedDiag
+    };
   }
 
-  if (!isMissedCallPayload(data)) {
-    return { ok: false, reason: "skip_not_missed", callType, event: eventName };
+  if (!isStrictlyMissedInboundPayload(data)) {
+    return {
+      ok: false,
+      reason: "skip_not_missed_strict_payload",
+      callType,
+      event: eventName,
+      missedDiag
+    };
   }
 
   const phone =
@@ -123,11 +159,17 @@ export function evaluateMissedInboundCustomerCall(callEvent: CallEventForInbound
     getString(data.phone) ??
     (callEvent.phone_normalized?.trim() ? callEvent.phone_normalized.trim() : null);
   if (!phone) {
-    return { ok: false, reason: "skip_missing_phone", callType, event: eventName };
+    return { ok: false, reason: "skip_missing_phone", callType, event: eventName, missedDiag };
   }
 
   if (isLikelyInternalOrAppPhone(phone)) {
-    return { ok: false, reason: "skip_phone_internal_like", callType, event: eventName };
+    return {
+      ok: false,
+      reason: "skip_phone_internal_like",
+      callType,
+      event: eventName,
+      missedDiag
+    };
   }
 
   const portalNum = getString(data.PORTAL_NUMBER) ?? getString(data.portal_number);
@@ -135,7 +177,13 @@ export function evaluateMissedInboundCustomerCall(callEvent: CallEventForInbound
     const a = digitsOnly(phone);
     const b = digitsOnly(portalNum);
     if (a.length > 0 && b.length > 0 && a === b) {
-      return { ok: false, reason: "skip_phone_same_as_portal", callType, event: eventName };
+      return {
+        ok: false,
+        reason: "skip_phone_same_as_portal",
+        callType,
+        event: eventName,
+        missedDiag
+      };
     }
   }
 
@@ -145,7 +193,13 @@ export function evaluateMissedInboundCustomerCall(callEvent: CallEventForInbound
     getString(data.user_id) ??
     (callEvent.manager_bitrix_user_id?.trim() ? callEvent.manager_bitrix_user_id.trim() : null);
   if (!manager) {
-    return { ok: false, reason: "skip_missing_manager_portal_user", callType, event: eventName };
+    return {
+      ok: false,
+      reason: "skip_missing_manager_portal_user",
+      callType,
+      event: eventName,
+      missedDiag
+    };
   }
 
   return { ok: true };
@@ -153,4 +207,16 @@ export function evaluateMissedInboundCustomerCall(callEvent: CallEventForInbound
 
 export function isMissedInboundCustomerCall(callEvent: CallEventForInboundFilter): boolean {
   return evaluateMissedInboundCustomerCall(callEvent).ok;
+}
+
+/** Узкий helper: входящий + реально пропущенный по колонкам и payload (без телефона/менеджера). */
+export function isActuallyMissedInboundCallEvent(callEvent: CallEventForInboundFilter): boolean {
+  if (callEventHasOutboundSignals(callEvent)) return false;
+  if (resolveCallTypeDigits(callEvent).trim() !== "2") return false;
+  const colDur = callEvent.call_duration_seconds;
+  if (typeof colDur === "number" && Number.isFinite(colDur) && colDur > 0) return false;
+  const data = extractVoximplantDataPayload(callEvent.raw_payload);
+  if (payloadIndicatesInboundCallWasAnsweredOrCompleted(data)) return false;
+  if (callEvent.status !== "missed") return false;
+  return isStrictlyMissedInboundPayload(data);
 }
