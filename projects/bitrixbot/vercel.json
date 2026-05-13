@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/org-structure-refresh",
+      "schedule": "0 4 * * *"
+    }
+  ]
+}

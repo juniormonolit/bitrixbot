@@ -9,6 +9,8 @@ export type UpdateAlertingSettingsInput = Partial<{
   send_only_to_mirror: boolean | string | null;
   updated_by: string | null;
   updated_reason: string | null;
+  org_structure_auto_refresh_enabled: boolean | string | null;
+  org_structure_auto_refresh_time_local: string | null;
 }>;
 
 function normalizeBool(v: unknown, fallback: boolean): boolean {
@@ -40,7 +42,14 @@ export async function updateAlertingSettings(
     dry_run_mode: normalizeBool(input.dry_run_mode, current.dry_run_mode),
     send_only_to_mirror: normalizeBool(input.send_only_to_mirror, current.send_only_to_mirror),
     updated_by: normalizeStringOrNull(input.updated_by) ?? current.updated_by,
-    updated_reason: normalizeStringOrNull(input.updated_reason) ?? current.updated_reason
+    updated_reason: normalizeStringOrNull(input.updated_reason) ?? current.updated_reason,
+    org_structure_auto_refresh_enabled: normalizeBool(
+      input.org_structure_auto_refresh_enabled,
+      current.org_structure_auto_refresh_enabled
+    ),
+    org_structure_auto_refresh_time_local:
+      normalizeStringOrNull(input.org_structure_auto_refresh_time_local) ??
+      current.org_structure_auto_refresh_time_local
   };
 
   const supabase = createServiceRoleClient();
