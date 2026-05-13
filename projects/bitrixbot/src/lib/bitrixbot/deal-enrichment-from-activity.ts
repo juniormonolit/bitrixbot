@@ -20,6 +20,19 @@ export type DealByActivityResolution = {
   reason: string | null;
 };
 
+export type CallEventDealEnrichmentRow = {
+  id: string;
+  bitrix_deal_id: string | null;
+  crm_activity_id: string | null;
+  /** Used for phone fallback when activity id is unusable or yields no deal. */
+  phone_normalized?: string | null;
+  deal_title: string | null;
+  deal_url: string | null;
+  deal_enriched_at: string | null;
+  deal_enrichment_error: string | null;
+  deal_enrichment_source: string | null;
+};
+
 function parseOwnerTypeId(v: unknown): number | null {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
@@ -38,9 +51,6 @@ export function buildDealDetailsUrl(dealId: string | number | null | undefined):
   return `${base}/crm/deal/details/${v}/`;
 }
 
-/**
- * Value for `{{deal_url}}` in templates that prefix with "Сделка:" — full URL or plain "не определена".
- */
 function stripLegacyDealLabelPrefix(stored: string): string {
   const t = stored.trim();
   if (/^Сделка:\s*/i.test(t)) {
@@ -92,7 +102,7 @@ function extractDealIdFromActivity(activity: Record<string, unknown>): {
   return { dealId: null, ownerTypeId, ownerId };
 }
 
-async function fetchDealTitle(dealId: string): Promise<string> {
+export async function fetchDealTitle(dealId: string): Promise<string> {
   const idNum = Number(dealId);
   if (!Number.isFinite(idNum)) return "";
   try {
@@ -107,6 +117,16 @@ async function fetchDealTitle(dealId: string): Promise<string> {
   }
 }
 
+/** True when CRM activity id is present and can be passed to crm.activity.get. */
+export function isUsableCrmActivityId(id: string | null | undefined): boolean {
+  if (id == null) return false;
+  const t = String(id).trim();
+  if (!t) return false;
+  const n = Number(t);
+  if (!Number.isFinite(n) || n === 0) return false;
+  return true;
+}
+
 /**
  * Resolve deal id/title/url from a CRM timeline activity id (crm.activity.get).
  * Does not throw on missing activity or non-deal owner (returns reason instead).
@@ -118,8 +138,8 @@ export async function resolveDealByCrmActivityId(activityId: string): Promise<De
   }
 
   const idNum = Number(trimmed);
-  if (!Number.isFinite(idNum)) {
-    return { activity: null, bindings: [], deal: null, reason: "invalid_activity_id" };
+  if (!Number.isFinite(idNum) || idNum === 0) {
+    return { activity: null, bindings: [], deal: null, reason: "crm_activity_id_is_zero" };
   }
 
   console.log(`${LOG} start crmActivityId=${trimmed}`);
@@ -164,77 +184,288 @@ export async function resolveDealByCrmActivityId(activityId: string): Promise<De
   };
 }
 
-export type CallEventDealEnrichmentRow = {
-  id: string;
-  bitrix_deal_id: string | null;
-  crm_activity_id: string | null;
-  deal_title: string | null;
-  deal_url: string | null;
-  deal_enriched_at: string | null;
-  deal_enrichment_error: string | null;
-};
+function asNumberArray(v: unknown): number[] {
+  if (!Array.isArray(v)) return [];
+  const out: number[] = [];
+  for (const x of v) {
+    const n = Number(x);
+    if (Number.isFinite(n) && n > 0) out.push(Math.trunc(n));
+  }
+  return out;
+}
 
-function shouldRunDealEnrichment(ce: CallEventDealEnrichmentRow): boolean {
-  if (ce.bitrix_deal_id?.trim()) return false;
-  if (!ce.crm_activity_id?.trim()) return false;
-  if (ce.deal_enriched_at) return false;
+function parseCreatedMs(it: Record<string, unknown>): number {
+  const ct = it.createdTime ?? it.DATE_CREATE ?? it.dateCreate;
+  if (typeof ct === "string") {
+    const t = new Date(ct).getTime();
+    if (Number.isFinite(t)) return t;
+  }
+  const id = Number(it.id);
+  return Number.isFinite(id) ? id : 0;
+}
+
+function isDealOpenish(it: Record<string, unknown>): boolean {
+  const sem = String(it.stageSemanticId ?? "");
+  if (sem === "L" || sem === "W") return false;
+  const o = it.opened;
+  if (o === "N" || o === false || o === 0 || o === "0") return false;
   return true;
 }
 
+async function listDealsWithFilterVariants(
+  filters: Record<string, unknown>[]
+): Promise<Record<string, unknown>[]> {
+  for (const filter of filters) {
+    try {
+      const res = await bitrixCall<{ items?: Record<string, unknown>[] }>("crm.item.list", {
+        entityTypeId: OWNER_TYPE_DEAL,
+        filter,
+        select: ["id", "title", "createdTime", "stageSemanticId", "opened"],
+        order: { id: "DESC" },
+        start: 0
+      });
+      const items = Array.isArray(res?.items) ? res.items : [];
+      if (items.length > 0) return items;
+    } catch {
+      // try next filter shape
+    }
+  }
+  return [];
+}
+
+function contactDealFilterVariants(contactId: number): Record<string, unknown>[] {
+  return [
+    { contactId: contactId },
+    { CONTACT_ID: contactId },
+    { "@contactIds": [contactId] }
+  ];
+}
+
+function companyDealFilterVariants(companyId: number): Record<string, unknown>[] {
+  return [
+    { companyId: companyId },
+    { COMPANY_ID: companyId },
+    { "@companyIds": [companyId] }
+  ];
+}
+
 /**
- * If the call event has CRM activity but no deal id, resolve deal via Bitrix and persist on `call_events`.
- * Never throws; logs failures and sets `deal_enrichment_error`.
+ * Find newest “open-ish” deal linked to duplicate search hits for a phone number.
  */
-export async function enrichCallEventDealIfNeeded(
+export async function resolveDealByPhoneLookup(phoneNormalized: string): Promise<ResolvedDealFromActivity | null> {
+  const base = phoneNormalized.trim();
+  if (!base) return null;
+
+  const values = [base];
+  const digits = base.replace(/\D/g, "");
+  if (digits.length >= 10 && !base.includes("+")) {
+    values.push(`+${digits}`);
+  }
+
+  try {
+    const dup = await bitrixCall<Record<string, unknown>>("crm.duplicate.findbycomm", {
+      type: "PHONE",
+      values: values.slice(0, 20)
+    });
+
+    const contactIds = asNumberArray(dup.CONTACT).slice(0, 8);
+    const companyIds = asNumberArray(dup.COMPANY).slice(0, 8);
+
+    const byId = new Map<number, Record<string, unknown>>();
+
+    for (const cid of contactIds) {
+      const items = await listDealsWithFilterVariants(contactDealFilterVariants(cid));
+      for (const it of items) {
+        const id = Number(it.id);
+        if (Number.isFinite(id) && !byId.has(id)) byId.set(id, it);
+      }
+    }
+    for (const cid of companyIds) {
+      const items = await listDealsWithFilterVariants(companyDealFilterVariants(cid));
+      for (const it of items) {
+        const id = Number(it.id);
+        if (Number.isFinite(id) && !byId.has(id)) byId.set(id, it);
+      }
+    }
+
+    const candidates = [...byId.values()];
+    if (candidates.length === 0) {
+      console.log(`${LOG} phone_lookup no_deals phone=${base.slice(0, 32)}`);
+      return null;
+    }
+
+    const openish = candidates.filter(isDealOpenish);
+    const pool = openish.length > 0 ? openish : candidates;
+    pool.sort((a, b) => parseCreatedMs(b) - parseCreatedMs(a));
+    const best = pool[0];
+    const id = String(best.id ?? "").trim();
+    if (!id) return null;
+
+    const title =
+      (typeof best.title === "string" && best.title.trim()) || (await fetchDealTitle(id)) || `Сделка #${id}`;
+    const url = buildDealDetailsUrl(id);
+    console.log(`${LOG} phone_lookup deal_found dealId=${id} title=${title.slice(0, 80)}`);
+    return { id, title, url };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.log(`${LOG} phone_lookup error phone=${base.slice(0, 32)} err=${msg}`);
+    return null;
+  }
+}
+
+async function persistSkipReason(
+  supabase: SupabaseClient,
+  ce: CallEventDealEnrichmentRow,
+  now: string,
+  reason: string,
+  source: string
+): Promise<{ error: { message: string } | null }> {
+  const { error } = await supabase
+    .from("call_events")
+    .update({
+      deal_enriched_at: now,
+      deal_enrichment_error: reason,
+      deal_enrichment_source: source
+    })
+    .eq("id", ce.id);
+  return { error };
+}
+
+/**
+ * Full deal enrichment: existing column → CRM activity → phone duplicate lookup.
+ * Sets `deal_enriched_at` once when the pipeline finishes (success or terminal failure).
+ */
+export async function enrichCallEventDealPipeline(
   supabase: SupabaseClient,
   ce: CallEventDealEnrichmentRow
 ): Promise<CallEventDealEnrichmentRow> {
-  if (!shouldRunDealEnrichment(ce)) return ce;
+  if (ce.deal_enriched_at) {
+    return ce;
+  }
 
-  const crmActivityId = ce.crm_activity_id!.trim();
   const now = new Date().toISOString();
+  const beforeDealId = ce.bitrix_deal_id?.trim() || null;
+  const crmRaw = ce.crm_activity_id?.trim() ?? "";
 
   try {
-    const resolution = await resolveDealByCrmActivityId(crmActivityId);
-
-    if (resolution.deal) {
+    if (ce.bitrix_deal_id?.trim()) {
+      const id = ce.bitrix_deal_id.trim();
+      const url = ce.deal_url?.trim() || buildDealDetailsUrl(id);
+      let title = ce.deal_title?.trim() || "";
+      if (!title) title = (await fetchDealTitle(id)) || `Сделка #${id}`;
       const patch = {
-        bitrix_deal_id: resolution.deal.id,
-        deal_title: resolution.deal.title,
-        deal_url: resolution.deal.url,
+        bitrix_deal_id: id,
+        deal_url: url,
+        deal_title: title,
+        deal_enrichment_source: "existing_call_event_deal_id",
         deal_enriched_at: now,
         deal_enrichment_error: null as string | null
       };
       const { error } = await supabase.from("call_events").update(patch).eq("id", ce.id);
-      if (error) {
-        console.log(`${LOG} persist_failed callEventId=${ce.id} err=${error.message}`);
-      } else {
-        console.log(`${LOG} saved callEventId=${ce.id} dealId=${resolution.deal.id}`);
-      }
-      return { ...ce, ...patch };
+      if (error) console.log(`${LOG} persist_failed callEventId=${ce.id} err=${error.message}`);
+      const merged = { ...ce, ...patch };
+      console.log(
+        `${LOG} pipeline callEventId=${ce.id} crmActivityId=${crmRaw || "null"} beforeDealId=${beforeDealId ?? "null"} afterDealId=${merged.bitrix_deal_id ?? "null"} dealUrl=${merged.deal_url ?? "null"} error=null source=${merged.deal_enrichment_source}`
+      );
+      return merged;
     }
 
-    const reason = resolution.reason ?? "deal_not_found_for_activity";
-    const patch = {
-      deal_enriched_at: now,
-      deal_enrichment_error: reason
-    };
-    const { error } = await supabase.from("call_events").update(patch).eq("id", ce.id);
-    if (error) {
-      console.log(`${LOG} persist_failed callEventId=${ce.id} err=${error.message}`);
+    let activityFailReason: string | null = null;
+    let activitySkipReason: string | null = null;
+
+    if (isUsableCrmActivityId(ce.crm_activity_id)) {
+      const resolution = await resolveDealByCrmActivityId(ce.crm_activity_id!.trim());
+      if (resolution.deal) {
+        const patch = {
+          bitrix_deal_id: resolution.deal.id,
+          deal_title: resolution.deal.title,
+          deal_url: resolution.deal.url,
+          deal_enriched_at: now,
+          deal_enrichment_error: null as string | null,
+          deal_enrichment_source: "crm_activity"
+        };
+        const { error } = await supabase.from("call_events").update(patch).eq("id", ce.id);
+        if (error) console.log(`${LOG} persist_failed callEventId=${ce.id} err=${error.message}`);
+        const merged = { ...ce, ...patch };
+        console.log(
+          `${LOG} pipeline callEventId=${ce.id} crmActivityId=${crmRaw} beforeDealId=${beforeDealId ?? "null"} afterDealId=${merged.bitrix_deal_id ?? "null"} dealUrl=${merged.deal_url ?? "null"} error=null source=crm_activity`
+        );
+        return merged;
+      }
+      activityFailReason = resolution.reason ?? "deal_not_found_for_activity";
+    } else {
+      activitySkipReason = !crmRaw ? "missing_crm_activity_id" : "crm_activity_id_is_zero";
     }
-    return { ...ce, ...patch };
+
+    const phone = ce.phone_normalized?.trim() ?? "";
+    let phoneTried = false;
+    if (phone) {
+      phoneTried = true;
+      const phoneDeal = await resolveDealByPhoneLookup(phone);
+      if (phoneDeal) {
+        const patch = {
+          bitrix_deal_id: phoneDeal.id,
+          deal_title: phoneDeal.title,
+          deal_url: phoneDeal.url,
+          deal_enriched_at: now,
+          deal_enrichment_error: null as string | null,
+          deal_enrichment_source: "phone_lookup"
+        };
+        const { error } = await supabase.from("call_events").update(patch).eq("id", ce.id);
+        if (error) console.log(`${LOG} persist_failed callEventId=${ce.id} err=${error.message}`);
+        const merged = { ...ce, ...patch };
+        console.log(
+          `${LOG} pipeline callEventId=${ce.id} crmActivityId=${crmRaw || "null"} beforeDealId=${beforeDealId ?? "null"} afterDealId=${merged.bitrix_deal_id ?? "null"} dealUrl=${merged.deal_url ?? "null"} error=null source=phone_lookup`
+        );
+        return merged;
+      }
+    }
+
+    let finalErr: string;
+    if (phoneTried) {
+      finalErr = "deal_not_found_by_phone";
+    } else if (activityFailReason) {
+      finalErr = activityFailReason;
+    } else if (activitySkipReason) {
+      finalErr = activitySkipReason;
+    } else {
+      finalErr = "not_found";
+    }
+
+    const { error } = await persistSkipReason(supabase, ce, now, finalErr, "not_found");
+    if (error) console.log(`${LOG} persist_failed callEventId=${ce.id} err=${error.message}`);
+    const merged = {
+      ...ce,
+      deal_enriched_at: now,
+      deal_enrichment_error: finalErr,
+      deal_enrichment_source: "not_found"
+    };
+    console.log(
+      `${LOG} pipeline callEventId=${ce.id} crmActivityId=${crmRaw || "null"} beforeDealId=${beforeDealId ?? "null"} afterDealId=null dealUrl=null error=${finalErr} source=not_found`
+    );
+    return merged;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.log(`${LOG} deal_not_found crmActivityId=${crmActivityId} reason=enrichment_exception:${msg}`);
-    const patch = {
+    const { error } = await supabase
+      .from("call_events")
+      .update({
+        deal_enriched_at: now,
+        deal_enrichment_error: `enrichment_exception:${msg}`,
+        deal_enrichment_source: "not_found"
+      })
+      .eq("id", ce.id);
+    if (error) console.log(`${LOG} persist_failed callEventId=${ce.id} err=${error.message}`);
+    console.log(
+      `${LOG} pipeline callEventId=${ce.id} crmActivityId=${crmRaw || "null"} beforeDealId=${beforeDealId ?? "null"} afterDealId=null dealUrl=null error=enrichment_exception:${msg} source=not_found`
+    );
+    return {
+      ...ce,
       deal_enriched_at: now,
-      deal_enrichment_error: `enrichment_exception:${msg}`
+      deal_enrichment_error: `enrichment_exception:${msg}`,
+      deal_enrichment_source: "not_found"
     };
-    const { error } = await supabase.from("call_events").update(patch).eq("id", ce.id);
-    if (error) {
-      console.log(`${LOG} persist_failed callEventId=${ce.id} err=${error.message}`);
-    }
-    return { ...ce, ...patch };
   }
 }
+
+/** @deprecated Use {@link enrichCallEventDealPipeline}. */
+export const enrichCallEventDealIfNeeded = enrichCallEventDealPipeline;

@@ -1,7 +1,7 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import {
   buildDealDetailsUrl,
-  enrichCallEventDealIfNeeded
+  enrichCallEventDealPipeline
 } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
 import { extractCallContext } from "@/src/lib/bitrixbot/extract-call-context";
 import { isMissedInboundCallEvent } from "@/src/lib/bitrixbot/is-missed-inbound-call-event";
@@ -37,6 +37,7 @@ type CallEventRow = {
   deal_url: string | null;
   deal_enriched_at: string | null;
   deal_enrichment_error: string | null;
+  deal_enrichment_source: string | null;
 };
 
 type ProcessingRow = {
@@ -173,7 +174,7 @@ export async function upsertMissedCallCaseFromEvent(
     const { data: callEvent, error: callErr } = await supabase
       .from("call_events")
       .select(
-        "id, occurred_at, status, call_direction, phone_normalized, manager_bitrix_user_id, bitrix_deal_id, crm_activity_id, bitrix_call_id, raw_payload, deal_title, deal_url, deal_enriched_at, deal_enrichment_error"
+        "id, occurred_at, status, call_direction, phone_normalized, manager_bitrix_user_id, bitrix_deal_id, crm_activity_id, bitrix_call_id, raw_payload, deal_title, deal_url, deal_enriched_at, deal_enrichment_error, deal_enrichment_source"
       )
       .eq("id", callEventId)
       .single();
@@ -230,18 +231,33 @@ export async function upsertMissedCallCaseFromEvent(
       warnings.push("phone_normalized_missing");
     }
 
-    const ceEnriched = await enrichCallEventDealIfNeeded(supabase, {
+    const beforeEnrichDealId = ce.bitrix_deal_id?.trim() || null;
+    const ceEnriched = await enrichCallEventDealPipeline(supabase, {
       id: ce.id,
       bitrix_deal_id: ce.bitrix_deal_id,
       crm_activity_id: ce.crm_activity_id,
+      phone_normalized: ce.phone_normalized,
       deal_title: ce.deal_title ?? null,
       deal_url: ce.deal_url ?? null,
       deal_enriched_at: ce.deal_enriched_at ?? null,
-      deal_enrichment_error: ce.deal_enrichment_error ?? null
+      deal_enrichment_error: ce.deal_enrichment_error ?? null,
+      deal_enrichment_source: ce.deal_enrichment_source ?? null
     });
     const mergedCe: CallEventRow = { ...ce, ...ceEnriched };
 
     const ctx = extractCallContext(mergedCe);
+
+    warnings.push(
+      `deal_pipeline:${JSON.stringify({
+        call_event_id: ce.id,
+        crm_activity_id: ce.crm_activity_id ?? null,
+        before_deal_id: beforeEnrichDealId,
+        after_deal_id: mergedCe.bitrix_deal_id ?? null,
+        deal_url: mergedCe.deal_url ?? null,
+        deal_enrichment_error: mergedCe.deal_enrichment_error ?? null,
+        deal_enrichment_source: mergedCe.deal_enrichment_source ?? null
+      })}`
+    );
     if (!ctx.phoneNormalized) warnings.push("phone_normalized_missing");
 
     const phoneNorm = ctx.phoneNormalized ?? ce.phone_normalized ?? "";
@@ -321,7 +337,7 @@ export async function upsertMissedCallCaseFromEvent(
       const { data: cur, error: curErr } = await supabase
         .from("missed_call_cases")
         .select(
-          "id, missed_count, manager_bitrix_user_id, manager_name, deal_id, deal_url, deal_title, deal_enriched_at, deal_enrichment_error, contact_name"
+          "id, missed_count, manager_bitrix_user_id, manager_name, deal_id, deal_url, deal_title, deal_enriched_at, deal_enrichment_error, deal_enrichment_source, contact_name"
         )
         .eq("id", caseId)
         .single();
@@ -336,20 +352,29 @@ export async function upsertMissedCallCaseFromEvent(
         deal_title: string | null;
         deal_enriched_at: string | null;
         deal_enrichment_error: string | null;
+        deal_enrichment_source: string | null;
         contact_name: string | null;
       };
 
       const nextDealId = current.deal_id ?? ctx.dealId;
+      const builtFromCtx =
+        ctx.dealId != null ? buildDealDetailsUrl(ctx.dealId) : "";
       const nextDealUrl =
         mergedCe.deal_url?.trim() ||
+        (builtFromCtx || null) ||
         current.deal_url?.trim() ||
         buildDealDetailsUrl(nextDealId) ||
         null;
       const nextDealTitle =
         mergedCe.deal_title?.trim() || current.deal_title?.trim() || null;
       const nextDealEnrichedAt = mergedCe.deal_enriched_at || current.deal_enriched_at;
-      const nextDealEnrichmentError =
-        mergedCe.deal_enrichment_error ?? current.deal_enrichment_error;
+      const nextDealEnrichmentError = mergedCe.bitrix_deal_id?.trim()
+        ? null
+        : mergedCe.deal_enrichment_error ?? current.deal_enrichment_error;
+      const nextDealEnrichmentSource =
+        mergedCe.deal_enrichment_source?.trim() ||
+        current.deal_enrichment_source?.trim() ||
+        null;
 
       const updatePayload = {
         missed_count: (current.missed_count ?? 0) + 1,
@@ -362,6 +387,7 @@ export async function upsertMissedCallCaseFromEvent(
         deal_title: nextDealTitle,
         deal_enriched_at: nextDealEnrichedAt,
         deal_enrichment_error: nextDealEnrichmentError,
+        deal_enrichment_source: nextDealEnrichmentSource,
         contact_name: current.contact_name ?? ctx.contactName,
         context: {
           last_call_event_id: ce.id,
@@ -381,16 +407,33 @@ export async function upsertMissedCallCaseFromEvent(
       const { error: upd2Err } = await supabase.from("missed_call_cases").update(updatePayload).eq("id", caseId);
       if (upd2Err) supabaseErr("missed_call_cases.update(existing)", upd2Err);
       updatedCase = true;
+      console.log(
+        `[missed-call-case] deal_fields caseId=${caseId} dealId=${nextDealId ?? "null"} dealUrl=${nextDealUrl ?? "null"} dealTitle=${nextDealTitle ?? "null"} source=${nextDealEnrichmentSource ?? "null"}`
+      );
+      warnings.push(
+        `deal_case_after_upsert:${JSON.stringify({
+          case_id: caseId,
+          deal_id: nextDealId,
+          deal_url: nextDealUrl,
+          deal_title: nextDealTitle,
+          deal_enrichment_source: nextDealEnrichmentSource
+        })}`
+      );
     } else {
       const dealUrl =
-        mergedCe.deal_url?.trim() || buildDealDetailsUrl(ctx.dealId) || null;
+        mergedCe.deal_url?.trim() ||
+        (ctx.dealId != null ? buildDealDetailsUrl(ctx.dealId) : "") ||
+        null;
       const insertPayload = {
         phone_normalized: phoneNorm,
         deal_id: ctx.dealId,
-        deal_url: dealUrl,
+        deal_url: dealUrl || null,
         deal_title: mergedCe.deal_title?.trim() || null,
         deal_enriched_at: mergedCe.deal_enriched_at,
-        deal_enrichment_error: mergedCe.deal_enrichment_error,
+        deal_enrichment_error: mergedCe.bitrix_deal_id?.trim()
+          ? null
+          : mergedCe.deal_enrichment_error,
+        deal_enrichment_source: mergedCe.deal_enrichment_source?.trim() || null,
         contact_name: ctx.contactName,
         manager_bitrix_user_id: ctx.managerBitrixUserId,
         manager_name: employeeInfo.managerName,
@@ -422,6 +465,18 @@ export async function upsertMissedCallCaseFromEvent(
       if (insCaseErr) supabaseErr("missed_call_cases.insert", insCaseErr);
       caseId = (insertedCase as { id: string }).id;
       createdCase = true;
+      console.log(
+        `[missed-call-case] deal_fields caseId=${caseId} dealId=${ctx.dealId ?? "null"} dealUrl=${dealUrl || "null"} dealTitle=${mergedCe.deal_title ?? "null"} source=${mergedCe.deal_enrichment_source ?? "null"}`
+      );
+      warnings.push(
+        `deal_case_after_upsert:${JSON.stringify({
+          case_id: caseId,
+          deal_id: ctx.dealId,
+          deal_url: dealUrl || null,
+          deal_title: mergedCe.deal_title,
+          deal_enrichment_source: mergedCe.deal_enrichment_source
+        })}`
+      );
     }
 
     mark("call_event_case_processing_mark_processed");
