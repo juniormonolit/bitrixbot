@@ -14,6 +14,7 @@ export function collectCallEventIdsFromCaseContext(context: unknown): string[] {
 export type CaseCallEventRow = {
   id: string;
   status: string | null;
+  manager_bitrix_user_id: string | null;
   call_direction: string | null;
   call_type_raw: string | null;
   call_duration_seconds: number | null;
@@ -31,7 +32,7 @@ export type CaseCallEventRow = {
 };
 
 const SELECT_FIELDS =
-  "id, status, call_direction, call_type_raw, call_duration_seconds, failed_code, crm_activity_id, bitrix_deal_id, phone_normalized, deal_url, deal_title, deal_enriched_at, deal_enrichment_error, deal_enrichment_source, raw_payload, occurred_at";
+  "id, status, manager_bitrix_user_id, call_direction, call_type_raw, call_duration_seconds, failed_code, crm_activity_id, bitrix_deal_id, phone_normalized, deal_url, deal_title, deal_enriched_at, deal_enrichment_error, deal_enrichment_source, raw_payload, occurred_at";
 
 /** Load call_events linked to a missed_call_case (context ids + recent same phone). */
 export async function loadCallEventsForCase(

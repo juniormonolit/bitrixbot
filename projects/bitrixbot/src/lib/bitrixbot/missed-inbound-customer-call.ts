@@ -1,3 +1,4 @@
+import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
 import { callEventHasOutboundSignals, resolveCallTypeDigits } from "@/src/lib/bitrixbot/call-event-outbound";
 import {
   buildMissedDiagSnapshot,
@@ -134,7 +135,18 @@ export function evaluateMissedInboundCustomerCall(callEvent: CallEventForInbound
     };
   }
 
-  if (callEvent.status !== "missed") {
+  const dbStatus = callEvent.status?.trim() ?? "";
+  if (dbStatus === "success") {
+    return {
+      ok: false,
+      reason: "skip_not_missed_status",
+      callType,
+      event: eventName,
+      missedDiag
+    };
+  }
+  /** Ingest may store ambiguous inbound rings as `other`; alerting only proceeds with strict missed payload. */
+  if (dbStatus !== "missed" && dbStatus !== "other") {
     return {
       ok: false,
       reason: "skip_not_missed_status",
@@ -187,15 +199,12 @@ export function evaluateMissedInboundCustomerCall(callEvent: CallEventForInbound
     }
   }
 
-  const manager =
-    getString(data.PORTAL_USER_ID) ??
-    getString(data.USER_ID) ??
-    getString(data.user_id) ??
-    (callEvent.manager_bitrix_user_id?.trim() ? callEvent.manager_bitrix_user_id.trim() : null);
-  if (!manager) {
+  /** Cases/deliveries must anchor on persisted manager id from ingest (`call_events.manager_bitrix_user_id`). */
+  const managerCol = normalizeBitrixUserId(callEvent.manager_bitrix_user_id);
+  if (!managerCol) {
     return {
       ok: false,
-      reason: "skip_missing_manager_portal_user",
+      reason: "skip_missing_manager",
       callType,
       event: eventName,
       missedDiag
@@ -211,12 +220,14 @@ export function isMissedInboundCustomerCall(callEvent: CallEventForInboundFilter
 
 /** Узкий helper: входящий + реально пропущенный по колонкам и payload (без телефона/менеджера). */
 export function isActuallyMissedInboundCallEvent(callEvent: CallEventForInboundFilter): boolean {
+  if (!normalizeBitrixUserId(callEvent.manager_bitrix_user_id)) return false;
   if (callEventHasOutboundSignals(callEvent)) return false;
   if (resolveCallTypeDigits(callEvent).trim() !== "2") return false;
   const colDur = callEvent.call_duration_seconds;
   if (typeof colDur === "number" && Number.isFinite(colDur) && colDur > 0) return false;
   const data = extractVoximplantDataPayload(callEvent.raw_payload);
   if (payloadIndicatesInboundCallWasAnsweredOrCompleted(data)) return false;
-  if (callEvent.status !== "missed") return false;
+  const st = callEvent.status?.trim() ?? "";
+  if (st !== "missed" && st !== "other") return false;
   return isStrictlyMissedInboundPayload(data);
 }

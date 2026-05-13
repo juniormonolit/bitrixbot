@@ -31,7 +31,7 @@ export async function GET(req: Request) {
   const { data: caseRow, error: caseErr } = await supabase
     .from("missed_call_cases")
     .select(
-      "id, phone_normalized, deal_id, deal_url, deal_title, deal_enriched_at, deal_enrichment_error, deal_enrichment_source, context"
+      "id, phone_normalized, deal_id, deal_url, deal_title, deal_enriched_at, deal_enrichment_error, deal_enrichment_source, manager_bitrix_user_id, manager_name, context"
     )
     .eq("id", caseId)
     .maybeSingle();
@@ -52,6 +52,8 @@ export async function GET(req: Request) {
     deal_enriched_at: string | null;
     deal_enrichment_error: string | null;
     deal_enrichment_source: string | null;
+    manager_bitrix_user_id: string | null;
+    manager_name: string | null;
     context: unknown;
   };
 
@@ -64,6 +66,7 @@ export async function GET(req: Request) {
   const callEvents = callEventRows.map((ev) => ({
     id: ev.id,
     status: ev.status,
+    manager_bitrix_user_id: ev.manager_bitrix_user_id,
     call_direction: ev.call_direction,
     call_type_raw: ev.call_type_raw,
     crm_activity_id: ev.crm_activity_id,
@@ -103,6 +106,8 @@ export async function GET(req: Request) {
     case: {
       id: c.id,
       phone: c.phone_normalized,
+      manager_bitrix_user_id: c.manager_bitrix_user_id,
+      manager_name: c.manager_name,
       context: c.context,
       bitrix_deal_id: c.deal_id != null ? String(c.deal_id) : null,
       deal_url: normalizeStoredDealUrl(c.deal_url),

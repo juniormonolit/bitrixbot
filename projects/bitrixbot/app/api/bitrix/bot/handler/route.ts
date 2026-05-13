@@ -313,6 +313,20 @@ export async function POST(req: Request) {
 
         if (callErr) throw new Error(callErr.message);
 
+        console.log("[bitrix-call-ingest]", {
+          saved: true,
+          webhookEvent: event ?? "",
+          status: normalized.status,
+          callType: normalized.call_type_raw,
+          direction: normalized.call_direction,
+          duration: normalized.call_duration_seconds,
+          failedCode: normalized.failed_code,
+          phone: normalized.phone_normalized,
+          manager: normalized.manager_bitrix_user_id,
+          activity: normalized.crm_activity_id,
+          bitrixCallId: normalized.bitrix_call_id
+        });
+
         await supabase
           .from("bitrix_webhook_events")
           .update({ processing_status: "processed" })

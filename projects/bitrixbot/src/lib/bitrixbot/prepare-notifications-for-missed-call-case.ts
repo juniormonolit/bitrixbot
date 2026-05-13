@@ -178,6 +178,20 @@ export async function prepareNotificationsForMissedCallCase(
 
   const typedCase = caseRow as MissedCallCaseRow;
 
+  const caseManagerId = normalizeBitrixUserId(typedCase.manager_bitrix_user_id);
+  if (!caseManagerId) {
+    warnings.push("prepare_skipped_missing_case_manager");
+    console.log(`${LOG} skipped_no_case_manager`, { caseId });
+    return {
+      caseId: typedCase.id,
+      selectedRuleId: null,
+      createdDeliveriesCount: 0,
+      skippedRecipients: [],
+      warnings,
+      managerRecipientFallbackUsed: false
+    };
+  }
+
   const outboundPrepareBlock = await outboundActivityBlocksMissedPrepare(supabase, {
     phone_normalized: typedCase.phone_normalized,
     context: typedCase.context
@@ -202,23 +216,21 @@ export async function prepareNotificationsForMissedCallCase(
   mark(diag, "prepare_notifications_lookup_employee_start", {
     manager_bitrix_user_id: typedCase.manager_bitrix_user_id
   });
-  const mid = normalizeBitrixUserId(typedCase.manager_bitrix_user_id);
+  const mid = caseManagerId;
   let typedHierarchy: ResolvedHierarchyRow | null = null;
-  if (mid) {
-    const { data: hierarchy, error: hierErr } = await withTimeout(
-      supabase
-        .from("org_resolved_hierarchy")
-        .select(
-          "manager_bitrix_user_id, rop_bitrix_user_id, rop_name, department_director_bitrix_user_id, department_director_name, company_director_bitrix_user_id, company_director_name"
-        )
-        .eq("manager_bitrix_user_id", mid)
-        .maybeSingle(),
-      DB_OP_MS,
-      "org_resolved_hierarchy.select"
-    );
-    if (hierErr) throw new Error(hierErr.message);
-    typedHierarchy = (hierarchy as ResolvedHierarchyRow | null) ?? null;
-  }
+  const { data: hierarchy, error: hierErr } = await withTimeout(
+    supabase
+      .from("org_resolved_hierarchy")
+      .select(
+        "manager_bitrix_user_id, rop_bitrix_user_id, rop_name, department_director_bitrix_user_id, department_director_name, company_director_bitrix_user_id, company_director_name"
+      )
+      .eq("manager_bitrix_user_id", mid)
+      .maybeSingle(),
+    DB_OP_MS,
+    "org_resolved_hierarchy.select"
+  );
+  if (hierErr) throw new Error(hierErr.message);
+  typedHierarchy = (hierarchy as ResolvedHierarchyRow | null) ?? null;
   mark(diag, "prepare_notifications_lookup_employee_done", { hasHierarchy: Boolean(typedHierarchy) });
 
   mark(diag, "prepare_notifications_rules_load_start", { caseId });
@@ -247,7 +259,7 @@ export async function prepareNotificationsForMissedCallCase(
   mark(diag, "prepare_notifications_resolve_recipients_start", { missedCount: typedCase.missed_count });
 
   const dealUrl = dealUrlForMessageTemplate(typedCase.deal_url, typedCase.deal_id);
-  const managerUid = normalizeBitrixUserId(typedCase.manager_bitrix_user_id);
+  const managerUid = mid;
 
   let created = 0;
   let lastMatchedRuleId: string | null = null;

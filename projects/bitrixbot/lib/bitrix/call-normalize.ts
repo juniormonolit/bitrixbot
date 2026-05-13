@@ -1,5 +1,8 @@
 import { normalizePhoneForAnalytics } from "@/lib/bitrix/phone-normalize";
-import { computeVoximplantStoredStatus } from "@/src/lib/bitrixbot/voximplant-inbound-missed";
+import {
+  computeVoximplantStoredStatus,
+  readCallDurationSecondsBestEffort
+} from "@/src/lib/bitrixbot/voximplant-inbound-missed";
 
 type JsonObject = Record<string, unknown>;
 
@@ -73,6 +76,8 @@ export function normalizeBitrixCallEvent(
     getString(data.PORTAL_USER_ID) ??
     getString(data.USER_ID) ??
     getString(data.user_id) ??
+    getString(data.REDIAL_USER_ID) ??
+    getString(data.redial_user_id) ??
     getString(auth.user_id) ??
     getString(auth.USER_ID);
 
@@ -84,7 +89,9 @@ export function normalizeBitrixCallEvent(
   const dealId = isDealEntity ? crmEntityId : null;
 
   const status = computeStatus(data);
-  const durationSeconds = getNumber(data.CALL_DURATION);
+  const durationBest = readCallDurationSecondsBestEffort(data);
+  const durationSeconds =
+    durationBest !== null ? durationBest : getNumber(data.CALL_DURATION);
   // Bitrix Voximplant CALL_TYPE: "1" = исходящий (outbound), "2" = входящий (inbound).
   const callTypeRaw = getString(data.CALL_TYPE);
   const failedCode = getString(data.CALL_FAILED_CODE);

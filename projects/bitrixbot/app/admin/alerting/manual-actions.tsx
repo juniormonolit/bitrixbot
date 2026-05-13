@@ -7,6 +7,7 @@ export type ManualActionKey =
   | "run_full_cycle"
   | "process_missed_calls"
   | "process_pending_deliveries"
+  | "skip_invalid_pending_deliveries"
   | "sync_org_full"
   | "sync_departments"
   | "sync_employees"
@@ -16,6 +17,7 @@ const ROUTES: Record<ManualActionKey, string> = {
   run_full_cycle: "/api/internal/alerting/run-full-cycle",
   process_missed_calls: "/api/debug/alerting/process-missed-calls",
   process_pending_deliveries: "/api/debug/alerting/process-pending-deliveries",
+  skip_invalid_pending_deliveries: "/api/debug/alerting/skip-invalid-pending-deliveries",
   sync_org_full: "/api/debug/alerting/sync-org-full",
   sync_departments: "/api/debug/alerting/sync-departments",
   sync_employees: "/api/debug/alerting/sync-employees",
@@ -243,6 +245,9 @@ export function ManualActions({ debugSecret }: { debugSecret: string }) {
             <option value="run_full_cycle">Запустить полный цикл</option>
             <option value="process_missed_calls">Обработать новые missed calls</option>
             <option value="process_pending_deliveries">Отправить pending deliveries</option>
+            <option value="skip_invalid_pending_deliveries">
+              Пометить skipped: невалидные pending deliveries
+            </option>
             <option value="sync_org_full">Обновить структуру компании (Bitrix → БД → иерархия)</option>
             <option value="sync_departments">Только: синхрон отделов из Bitrix</option>
             <option value="sync_employees">Только: синхрон сотрудников из Bitrix</option>

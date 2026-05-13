@@ -186,8 +186,10 @@ export function buildMissedDiagSnapshot(input: {
 
 /** Поля для case-debug / логов (без полного raw). */
 export function voximplantPayloadSummary(raw_payload: unknown): Record<string, unknown> {
+  const root = getObj(raw_payload);
   const data = extractVoximplantDataPayload(raw_payload);
   return {
+    WEBHOOK_EVENT: getString(root.event) ?? getString(root.EVENT),
     CALL_TYPE: getString(data.CALL_TYPE),
     CALL_DURATION: data.CALL_DURATION ?? null,
     CALL_STATUS: getString(data.CALL_STATUS) ?? getString(data.STATUS),

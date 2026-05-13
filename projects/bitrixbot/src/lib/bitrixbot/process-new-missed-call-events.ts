@@ -123,6 +123,7 @@ function bucketSkipReason(reason: string): string {
     case "skip_phone_same_as_portal":
     case "skip_phone_internal_like":
       return "missing_or_invalid_phone";
+    case "skip_missing_manager":
     case "skip_missing_manager_portal_user":
       return "missing_manager";
     default:
@@ -232,14 +233,16 @@ export async function processNewMissedCallEvents(
   const { data: candidates, error: candErr } = await supabase
     .from("call_events")
     .select("id, occurred_at, phone_normalized, manager_bitrix_user_id")
-    .eq("status", "missed")
-    .or("call_direction.is.null,call_direction.eq.inbound,call_direction.eq.unknown")
+    .in("status", ["missed", "other"])
+    .eq("call_type_raw", "2")
+    .neq("call_direction", "outbound")
+    .or("call_duration_seconds.is.null,call_duration_seconds.eq.0")
     .order("occurred_at", { ascending: false })
     .limit(candidateFetchSize);
 
   if (candErr) {
     console.error(`${LOG} candidate call_events error`, candErr);
-    formatSupabaseError("call_events.select(missed,inbound)", candErr);
+    formatSupabaseError("call_events.select(inbound_type2_non_outbound_duration0_missed_or_other)", candErr);
   }
   const rows = (candidates ?? []) as CallEventRow[];
   console.log(`${LOG} after candidate call_events`, { count: rows.length, error: null });

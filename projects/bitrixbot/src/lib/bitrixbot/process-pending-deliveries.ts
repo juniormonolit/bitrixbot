@@ -8,6 +8,7 @@ import {
 } from "@/src/lib/bitrixbot/re-enrich-case-deal";
 import { sendBitrixMessage } from "@/src/lib/bitrixbot/send-bitrix-message";
 import { outboundActivityBlocksMissedPrepare } from "@/src/lib/bitrixbot/alerting-prepare-outbound-guard";
+import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
 
 type DeliveryRow = {
   id: string;
@@ -28,6 +29,8 @@ type MirrorRow = {
 
 const SKIPPED_PRIMARY_MIRROR_ONLY_MESSAGE =
   "Skipped: send_only_to_mirror mode is enabled";
+
+const BAD_ALERT_MESSAGE_FRAGMENTS = ["Менеджер: Не назначен", "Основной получатель: Не назначен"];
 
 export type ProcessPendingDeliveriesSummary = {
   mode: "blocked_by_kill_switch" | "blocked_by_dry_run" | "mirror_only_test" | "live";
@@ -162,16 +165,35 @@ export async function processPendingDeliveries(
       const { data: caseMini, error: cmErr } = await withTimeout(
         supabase
           .from("missed_call_cases")
-          .select("phone_normalized, context")
+          .select("phone_normalized, context, manager_bitrix_user_id")
           .eq("id", d.case_id)
           .maybeSingle(),
         2500,
         `pending_case_mini:${d.case_id}`
       );
       if (!cmErr && caseMini) {
+        const typedMini = caseMini as {
+          phone_normalized: string;
+          context?: unknown;
+          manager_bitrix_user_id: string | null;
+        };
+
+        if (!normalizeBitrixUserId(typedMini.manager_bitrix_user_id)) {
+          const { error: skipErr } = await supabase
+            .from("notification_deliveries")
+            .update({
+              delivery_status: "skipped",
+              error_message: "guard_before_send:missing_case_manager_bitrix_user_id"
+            })
+            .eq("id", d.id);
+          if (skipErr) throw new Error(skipErr.message);
+          warnings.push(`${d.id}:skipped_missing_case_manager`);
+          continue;
+        }
+
         const blockReason = await outboundActivityBlocksMissedPrepare(supabase, {
-          phone_normalized: (caseMini as { phone_normalized: string }).phone_normalized,
-          context: (caseMini as { context?: unknown }).context ?? null
+          phone_normalized: typedMini.phone_normalized,
+          context: typedMini.context ?? null
         });
         if (blockReason) {
           const { error: skipErr } = await supabase
@@ -234,13 +256,29 @@ export async function processPendingDeliveries(
       warnings.push(`delivery_phone_line_patch_failed:${d.id}`);
     }
 
-    if (!d.recipient_bitrix_user_id && mode === "live") {
+    if (BAD_ALERT_MESSAGE_FRAGMENTS.some((frag) => messageText.includes(frag))) {
       const { error: updErr } = await supabase
         .from("notification_deliveries")
-        .update({ delivery_status: "failed", error_message: "Recipient Bitrix user id is missing" })
+        .update({
+          delivery_status: "skipped",
+          error_message: "guard_before_send:placeholder_manager_or_recipient_in_body"
+        })
         .eq("id", d.id);
       if (updErr) throw new Error(updErr.message);
-      failedDeliveries++;
+      warnings.push(`${d.id}:skipped_placeholder_manager_message`);
+      continue;
+    }
+
+    if (!normalizeBitrixUserId(d.recipient_bitrix_user_id)) {
+      const { error: updErr } = await supabase
+        .from("notification_deliveries")
+        .update({
+          delivery_status: "skipped",
+          error_message: "guard_before_send:recipient_bitrix_user_id_missing"
+        })
+        .eq("id", d.id);
+      if (updErr) throw new Error(updErr.message);
+      warnings.push(`${d.id}:skipped_missing_recipient`);
       continue;
     }
 
