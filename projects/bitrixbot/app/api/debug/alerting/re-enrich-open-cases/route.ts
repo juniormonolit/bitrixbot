@@ -13,12 +13,11 @@ function isAuthorized(req: Request): boolean {
 
 /** Batch re-enrich open missed_call_cases with missing or invalid deal fields. */
 export async function POST(request: Request) {
-  void request;
-  if (!isAuthorized(req)) {
+  if (!isAuthorized(request)) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
-  const url = new URL(req.url);
+  const url = new URL(request.url);
   const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get("limit") ?? "50", 10) || 50));
 
   const supabase = createServiceRoleClient();

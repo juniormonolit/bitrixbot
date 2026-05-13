@@ -31,7 +31,7 @@ export async function POST(req: Request) {
   try {
     const supabase = createServiceRoleClient();
     const result = await reEnrichMissedCallCaseDeal(supabase, caseId, { phoneEventLimit });
-    return NextResponse.json({ ok: result.ok, ...result });
+    return NextResponse.json(result);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ ok: false, error: msg, caseId }, { status: 500 });
