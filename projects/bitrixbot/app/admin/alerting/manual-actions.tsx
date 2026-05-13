@@ -25,11 +25,74 @@ function errMessageFromJson(json: unknown, status: number): string {
   return `HTTP ${status}`;
 }
 
+function hasActionIssues(lastResult: unknown): boolean {
+  if (!lastResult || typeof lastResult !== "object" || lastResult === null) return false;
+  const root = lastResult as {
+    issuesPresent?: boolean;
+    summary?: {
+      missedCalls?: {
+        ok?: boolean;
+        result?: {
+          issuesPresent?: boolean;
+          failedEvents?: number;
+          upsertFailures?: unknown[];
+        };
+      };
+    };
+  };
+  if (root.issuesPresent === true) return true;
+  const mc = root.summary?.missedCalls;
+  if (mc && mc.ok === false) return true;
+  const r = mc?.result;
+  if (!r) return false;
+  if (r.issuesPresent === true) return true;
+  if (typeof r.failedEvents === "number" && r.failedEvents > 0) return true;
+  if (Array.isArray(r.upsertFailures) && r.upsertFailures.length > 0) return true;
+  return false;
+}
+
+function getMissedCallsSummaryFromActionResult(
+  lastResult: unknown
+):
+  | {
+      failedEvents?: number;
+      upsertFailures?: unknown[];
+      employeeNotFound?: unknown[];
+      warnings?: unknown[];
+    }
+  | undefined {
+  if (!lastResult || typeof lastResult !== "object" || lastResult === null) return undefined;
+  const r = lastResult as {
+    summary?: { failedEvents?: number; missedCalls?: { result?: Record<string, unknown> } };
+  };
+  if (r.summary && typeof r.summary.failedEvents === "number") {
+    return r.summary as {
+      failedEvents?: number;
+      upsertFailures?: unknown[];
+      employeeNotFound?: unknown[];
+      warnings?: unknown[];
+    };
+  }
+  const inner = r.summary?.missedCalls?.result;
+  if (inner && typeof inner === "object") {
+    return inner as {
+      failedEvents?: number;
+      upsertFailures?: unknown[];
+      employeeNotFound?: unknown[];
+      warnings?: unknown[];
+    };
+  }
+  return undefined;
+}
+
 export function ManualActions({ debugSecret }: { debugSecret: string }) {
   const router = useRouter();
   const [isRunning, setIsRunning] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<unknown>(null);
+
+  const resultIssues = hasActionIssues(lastResult);
+  const sum = getMissedCallsSummaryFromActionResult(lastResult);
 
   const onSubmit = useCallback(
     async (e: React.FormEvent<HTMLFormElement>) => {
@@ -132,6 +195,21 @@ export function ManualActions({ debugSecret }: { debugSecret: string }) {
       {lastError ? (
         <div className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
           {lastError}
+        </div>
+      ) : null}
+
+      {resultIssues ? (
+        <div className="mt-3 rounded-md border border-amber-400/45 bg-amber-500/15 px-3 py-2 text-sm leading-relaxed text-amber-50">
+          Запрос завершился с предупреждениями:{" "}
+          <span className="font-medium">failedEvents={String(sum?.failedEvents ?? "—")}</span>
+          {Array.isArray(sum?.upsertFailures) ? (
+            <span className="font-medium">, upsertFailures={sum?.upsertFailures.length}</span>
+          ) : null}
+          {Array.isArray(sum?.employeeNotFound) ? (
+            <span className="font-medium">, employeeNotFound_groups={sum?.employeeNotFound.length}</span>
+          ) : null}
+          . В JSON: для отдельного «missed calls» — <code className="text-amber-100/90">summary.*</code>; для
+          полного цикла — <code className="text-amber-100/90">summary.missedCalls.result.*</code>.
         </div>
       ) : null}
 

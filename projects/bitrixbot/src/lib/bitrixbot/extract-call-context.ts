@@ -1,3 +1,5 @@
+import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
+
 type JsonObject = Record<string, unknown>;
 
 export type ExtractedCallContext = {
@@ -58,7 +60,7 @@ export function extractCallContext(callEvent: CallEventRow): ExtractedCallContex
 
   return {
     phoneNormalized: fromColumns.phoneNormalized,
-    managerBitrixUserId: fromColumns.managerBitrixUserId,
+    managerBitrixUserId: normalizeBitrixUserId(fromColumns.managerBitrixUserId),
     dealId,
     contactName
   };

@@ -9,6 +9,7 @@ import {
   DEFAULT_MIRROR_BITRIX_USER_ID
 } from "@/src/lib/bitrixbot/alerting-mode";
 import type { AlertingSettings } from "@/src/lib/bitrixbot/get-alerting-settings";
+import type { CallEventManagerDiagnostics } from "@/src/lib/bitrixbot/call-event-manager-diagnostics";
 import { ManualActions } from "./manual-actions";
 import {
   applyAlertingModeAction,
@@ -231,6 +232,7 @@ export function AlertingConsole(props: {
   mirrorDeliveries: MirrorDeliveryRow[];
   templates: { manager: TemplatePanelRow | null; rop: TemplatePanelRow | null };
   orgSnapshot: OrgStructureSnapshot;
+  managerCallDiagnostics: CallEventManagerDiagnostics;
 }) {
   const [tab, setTab] = useState<TabId>("mode");
   const mode = deriveAlertingMode(props.settings);
@@ -606,6 +608,79 @@ export function AlertingConsole(props: {
             </Card>
           </div>
 
+          <Card title="Проверка manager Bitrix user ids (последние missed inbound)">
+            <p className="mb-3 text-xs text-white/55">
+              Сравнение <code className="text-white/75">call_events.manager_bitrix_user_id</code> с таблицами{" "}
+              {props.managerCallDiagnostics.lookedUpInTables.join(" · ")}. Всего строк в БД: employees={" "}
+              {props.managerCallDiagnostics.employeesTableRowCount}, hierarchy={""}
+              {props.managerCallDiagnostics.hierarchyCacheRowCount}.
+            </p>
+            <div className="mb-4 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+              <div className="rounded-md border border-white/10 bg-black/20 p-2">
+                <div className="text-[10px] text-white/45">Событий с manager id</div>
+                <div className="text-lg font-semibold">{props.managerCallDiagnostics.recentCallEventsAnalyzed}</div>
+              </div>
+              <div className="rounded-md border border-white/10 bg-black/20 p-2">
+                <div className="text-[10px] text-white/45">Уникальных manager id</div>
+                <div className="text-lg font-semibold">{props.managerCallDiagnostics.uniqueManagerBitrixUserIds}</div>
+              </div>
+              <div className="rounded-md border border-white/10 bg-black/20 p-2">
+                <div className="text-[10px] text-white/45">Найдено в employees</div>
+                <div className="text-lg font-semibold text-emerald-100/90">
+                  {props.managerCallDiagnostics.foundInEmployeesTable}
+                </div>
+              </div>
+              <div className="rounded-md border border-amber-400/25 bg-amber-500/10 p-2">
+                <div className="text-[10px] text-amber-100/80">Нет в employees</div>
+                <div className="text-lg font-semibold text-amber-100">
+                  {props.managerCallDiagnostics.missingFromEmployees}
+                </div>
+              </div>
+            </div>
+            <p className="mb-2 text-[11px] text-white/45">
+              Точечная проверка:{" "}
+              <code className="break-all text-white/70">
+                /api/debug/alerting/org-lookup?secret=…&amp;bitrixUserId=1933
+              </code>
+            </p>
+            {props.managerCallDiagnostics.missingManagers.length === 0 ? (
+              <p className="text-sm text-emerald-100/90">Все manager id из выборки есть в employees.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="text-white/60">
+                    <tr>
+                      <th className="py-2">manager_bitrix_user_id</th>
+                      <th className="py-2">звонков</th>
+                      <th className="py-2">в hierarchy</th>
+                      <th className="py-2">sample phones</th>
+                      <th className="py-2">sample occurred_at</th>
+                      <th className="py-2">sample call_event_id</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-white/80">
+                    {props.managerCallDiagnostics.missingManagers.map((m) => (
+                      <tr key={m.managerBitrixUserId} className="border-t border-white/10 align-top">
+                        <td className="py-2 font-mono">{m.managerBitrixUserId}</td>
+                        <td className="py-2">{m.callCount}</td>
+                        <td className="py-2">{m.foundInHierarchy ? "да" : "нет"}</td>
+                        <td className="max-w-[10rem] py-2 [overflow-wrap:anywhere] text-[11px]">
+                          {m.samplePhones.join(", ") || "—"}
+                        </td>
+                        <td className="max-w-[12rem] py-2 whitespace-pre-wrap text-[10px] text-white/55">
+                          {m.sampleOccurredAt.join("\n")}
+                        </td>
+                        <td className="max-w-[14rem] py-2 font-mono text-[10px] [overflow-wrap:anywhere]">
+                          {m.sampleCallEventIds.join(", ")}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+
           <Card title="Автообновление структуры">
             <p className="mb-3 text-sm text-white/70">
               По расписанию Vercel Cron вызывает{" "}
@@ -638,8 +713,8 @@ export function AlertingConsole(props: {
 
           <Card title="Менеджер → руководители (фрагмент кэша)">
             <p className="mb-2 text-xs text-white/50">
-              Предупреждения вида employee_not_found при пересборке смотрите в ответе ручного действия «Обновить
-              структуру» (JSON).
+              Диагностика <code className="text-white/75">employee_not_found</code>: см. блок выше и ответ «Обработать
+              новые missed calls» (<code className="text-white/75">summary.employeeNotFound</code>).
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">

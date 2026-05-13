@@ -12,10 +12,25 @@ export async function POST(req: Request) {
 
   const startedAt = Date.now();
   const summary = await runAlertingFullCycle(limit);
+  const durationMs = Date.now() - startedAt;
+
+  let issuesPresent = false;
+  const mc = summary.missedCalls;
+  if (mc) {
+    if (!mc.ok) issuesPresent = true;
+    else if (
+      mc.result.failedEvents > 0 ||
+      mc.result.upsertFailures.length > 0 ||
+      mc.result.issuesPresent
+    ) {
+      issuesPresent = true;
+    }
+  }
 
   return NextResponse.json({
     ok: true,
-    durationMs: Date.now() - startedAt,
-    summary
+    durationMs,
+    summary,
+    issuesPresent
   });
 }

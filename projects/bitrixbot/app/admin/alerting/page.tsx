@@ -1,6 +1,7 @@
 import { env } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { getAlertingDashboardSummary } from "@/src/lib/bitrixbot/alerting-dashboard";
+import { getCallEventManagerDiagnostics } from "@/src/lib/bitrixbot/call-event-manager-diagnostics";
 import { getAlertingSettings } from "@/src/lib/bitrixbot/get-alerting-settings";
 import {
   AlertingConsole,
@@ -120,7 +121,8 @@ export default async function AlertingConsolePage({
     mirrorDeliveries,
     tplManager,
     tplRop,
-    orgSnapshot
+    orgSnapshot,
+    managerCallDiagnostics
   ] = await Promise.all([
     getAlertingSettings(),
     getAlertingDashboardSummary(),
@@ -129,7 +131,8 @@ export default async function AlertingConsolePage({
     fetchLastMirrorDeliveries(),
     fetchTemplateByRole("manager"),
     fetchTemplateByRole("rop"),
-    fetchOrgStructureSnapshot()
+    fetchOrgStructureSnapshot(),
+    getCallEventManagerDiagnostics()
   ]);
 
   return (
@@ -142,6 +145,7 @@ export default async function AlertingConsolePage({
       mirrorDeliveries={mirrorDeliveries}
       templates={{ manager: tplManager, rop: tplRop }}
       orgSnapshot={orgSnapshot}
+      managerCallDiagnostics={managerCallDiagnostics}
     />
   );
 }
