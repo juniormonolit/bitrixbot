@@ -93,8 +93,9 @@ export function normalizeBitrixCallEvent(
   const failedCode = getString(data.CALL_FAILED_CODE);
   const failedReason = getString(data.CALL_FAILED_REASON);
   const callStartDateRaw = getString(data.CALL_START_DATE);
+  /** Bitrix Voximplant: 1 = outbound, 2 = inbound. */
   const callDirection =
-    callTypeRaw === "1" ? "inbound" : callTypeRaw === "2" ? "outbound" : "unknown";
+    callTypeRaw === "1" ? "outbound" : callTypeRaw === "2" ? "inbound" : "unknown";
 
   return {
     manager_bitrix_user_id: managerUserId,

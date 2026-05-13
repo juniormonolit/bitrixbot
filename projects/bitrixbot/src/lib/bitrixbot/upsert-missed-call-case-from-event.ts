@@ -5,7 +5,7 @@ import {
   normalizeStoredDealUrl
 } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
 import { extractCallContext } from "@/src/lib/bitrixbot/extract-call-context";
-import { isMissedInboundCallEvent } from "@/src/lib/bitrixbot/is-missed-inbound-call-event";
+import { evaluateMissedInboundCustomerCall } from "@/src/lib/bitrixbot/missed-inbound-customer-call";
 import { lookupEmployeeByBitrixUserId } from "@/src/lib/bitrixbot/employee-lookup";
 import { safeJsonTopKeys, safeNestedKeys } from "@/src/lib/bitrixbot/payload-diag";
 import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
@@ -57,6 +57,8 @@ export type UpsertMissedCallCaseResult = {
   createdDeliveries: number;
   warnings: string[];
   error: string | null;
+  /** Причина раннего skip по фильтру входящих пропущенных (для агрегата skippedReasons). */
+  filterSkipReason?: string | null;
   /** Одно событие без сотрудника в таблице employees — для агрегата в process-new. */
   employeeNotFoundHit?: {
     managerBitrixUserId: string | null;
@@ -209,11 +211,15 @@ export async function upsertMissedCallCaseFromEvent(
 
     const attempts = (processing.processing_attempts ?? 0) + 1;
 
-    if (!isMissedInboundCallEvent(ce)) {
+    const inboundEval = evaluateMissedInboundCustomerCall(ce);
+    if (!inboundEval.ok) {
+      console.log(
+        `[missed-call-filter] skip callEventId=${ce.id} reason=${inboundEval.reason} callType=${inboundEval.callType ?? ""} event=${inboundEval.event ?? ""}`
+      );
       await markProcessing(supabase, processing.id, {
         processing_status: "skipped",
         processed_at: new Date().toISOString(),
-        error_message: null,
+        error_message: inboundEval.reason,
         processing_attempts: attempts
       });
       return {
@@ -224,7 +230,8 @@ export async function upsertMissedCallCaseFromEvent(
         updatedCase: false,
         createdDeliveries: 0,
         warnings,
-        error: null
+        error: null,
+        filterSkipReason: inboundEval.reason
       };
     }
 

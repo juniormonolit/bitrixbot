@@ -50,6 +50,30 @@ function clampEffectiveLimit(limit: number | undefined): number {
   return Math.min(MAX_EFFECTIVE_LIMIT, raw);
 }
 
+/** Агрегат для summary: укрупнённые причины filter skip. */
+function bucketSkipReason(reason: string): string {
+  switch (reason) {
+    case "skip_outgoing_call":
+    case "skip_not_inbound":
+    case "skip_call_type_3":
+    case "skip_unknown_call_type":
+      return "not_inbound";
+    case "skip_call_event_not_final":
+      return "not_final_event";
+    case "skip_not_missed":
+    case "skip_not_missed_status":
+      return "not_missed";
+    case "skip_missing_phone":
+    case "skip_phone_same_as_portal":
+    case "skip_phone_internal_like":
+      return "missing_or_invalid_phone";
+    case "skip_missing_manager_portal_user":
+      return "missing_manager";
+    default:
+      return reason.replace(/^skip_/, "");
+  }
+}
+
 function formatSupabaseError(
   ctx: string,
   err: { message: string; details?: string | null; hint?: string | null; code?: string | null }
@@ -100,7 +124,7 @@ export type ProcessNewMissedCallEventsSummary = {
   upsertFailures: UpsertFailureDiag[];
   /** Есть ли что показать как warning в UI (таймауты, failedEvents, missing employees). */
   issuesPresent: boolean;
-  /** Rows returned from the missed+inbound query (bounded batch). */
+  /** Rows returned from the missed-call candidate query (bounded batch). */
   fetchedCandidateEvents: number;
   /** Among fetched candidates, how many already have `call_event_case_processing`. */
   alreadyProcessedCandidates: number;
@@ -108,6 +132,8 @@ export type ProcessNewMissedCallEventsSummary = {
   unprocessedCandidates: number;
   /** Limit after clamp [1, 100]; this many events are passed to `upsertMissedCallCaseFromEvent` at most. */
   effectiveLimit: number;
+  /** Сколько событий отфильтровано helper’ом по причине (см. bucketSkipReason). */
+  skippedReasons: Record<string, number>;
 };
 
 export async function processNewMissedCallEvents(
@@ -131,7 +157,6 @@ export async function processNewMissedCallEvents(
     .from("call_events")
     .select("id, occurred_at, phone_normalized, manager_bitrix_user_id")
     .eq("status", "missed")
-    .eq("call_direction", "inbound")
     .order("occurred_at", { ascending: false })
     .limit(candidateFetchSize);
 
@@ -160,7 +185,8 @@ export async function processNewMissedCallEvents(
       fetchedCandidateEvents: 0,
       alreadyProcessedCandidates: 0,
       unprocessedCandidates: 0,
-      effectiveLimit
+      effectiveLimit,
+      skippedReasons: {}
     };
     console.log(`${LOG} finish summary (no candidates)`, emptySummary);
     return emptySummary;
@@ -204,6 +230,7 @@ export async function processNewMissedCallEvents(
   let createdCases = 0;
   let updatedCases = 0;
   let createdDeliveries = 0;
+  const skippedReasons: Record<string, number> = {};
 
   for (const ev of toProcess) {
     console.log(`${LOG} before upsert`, {
@@ -280,8 +307,14 @@ export async function processNewMissedCallEvents(
       if (res.employeeNotFoundHit) {
         mergeEmployeeNotFoundHit(employeeNotFoundMap, res.employeeNotFoundHit, deliveryFallbackUsed);
       }
-    } else if (res.status === "skipped" || res.status === "noop") {
+    } else if (res.status === "skipped") {
       skippedEvents++;
+      if (res.filterSkipReason) {
+        const b = bucketSkipReason(res.filterSkipReason);
+        skippedReasons[b] = (skippedReasons[b] ?? 0) + 1;
+      }
+      warnings.push(...res.warnings);
+    } else if (res.status === "noop") {
       warnings.push(...res.warnings);
     } else {
       failedEvents++;
@@ -308,7 +341,8 @@ export async function processNewMissedCallEvents(
     fetchedCandidateEvents,
     alreadyProcessedCandidates,
     unprocessedCandidates,
-    effectiveLimit
+    effectiveLimit,
+    skippedReasons
   };
   console.log(`${LOG} finish summary`, summary);
   return summary;

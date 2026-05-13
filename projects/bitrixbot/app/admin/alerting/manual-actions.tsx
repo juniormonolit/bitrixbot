@@ -68,6 +68,9 @@ function getMissedCallsSummaryFromActionResult(
   lastResult: unknown
 ):
   | {
+      processedEvents?: number;
+      skippedEvents?: number;
+      skippedReasons?: Record<string, number>;
       failedEvents?: number;
       upsertFailures?: unknown[];
       employeeNotFound?: unknown[];
@@ -76,10 +79,37 @@ function getMissedCallsSummaryFromActionResult(
   | undefined {
   if (!lastResult || typeof lastResult !== "object" || lastResult === null) return undefined;
   const r = lastResult as {
-    summary?: { failedEvents?: number; missedCalls?: { result?: Record<string, unknown> } };
+    summary?: {
+      failedEvents?: number;
+      missedCalls?: { result?: Record<string, unknown> };
+      processedEvents?: number;
+      skippedEvents?: number;
+      skippedReasons?: Record<string, number>;
+    };
   };
+  const direct = r.summary;
+  if (
+    direct &&
+    typeof direct === "object" &&
+    (typeof direct.processedEvents === "number" ||
+      typeof direct.skippedEvents === "number" ||
+      (direct.skippedReasons && typeof direct.skippedReasons === "object"))
+  ) {
+    return direct as {
+      processedEvents?: number;
+      skippedEvents?: number;
+      skippedReasons?: Record<string, number>;
+      failedEvents?: number;
+      upsertFailures?: unknown[];
+      employeeNotFound?: unknown[];
+      warnings?: unknown[];
+    };
+  }
   if (r.summary && typeof r.summary.failedEvents === "number") {
     return r.summary as {
+      processedEvents?: number;
+      skippedEvents?: number;
+      skippedReasons?: Record<string, number>;
       failedEvents?: number;
       upsertFailures?: unknown[];
       employeeNotFound?: unknown[];
@@ -89,6 +119,9 @@ function getMissedCallsSummaryFromActionResult(
   const inner = r.summary?.missedCalls?.result;
   if (inner && typeof inner === "object") {
     return inner as {
+      processedEvents?: number;
+      skippedEvents?: number;
+      skippedReasons?: Record<string, number>;
       failedEvents?: number;
       upsertFailures?: unknown[];
       employeeNotFound?: unknown[];
@@ -212,6 +245,14 @@ export function ManualActions({ debugSecret }: { debugSecret: string }) {
       {lastError ? (
         <div className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
           {lastError}
+        </div>
+      ) : null}
+
+      {typeof sum?.processedEvents === "number" || typeof sum?.skippedEvents === "number" ? (
+        <div className="mt-3 rounded-md border border-white/10 bg-white/[0.06] px-3 py-2 text-xs leading-relaxed text-white/75">
+          Missed calls: processed={String(sum?.processedEvents ?? "—")}, skipped={String(sum?.skippedEvents ?? "—")}
+          , skippedReasons=
+          <code className="text-emerald-100/85">{JSON.stringify(sum?.skippedReasons ?? {})}</code>
         </div>
       ) : null}
 
