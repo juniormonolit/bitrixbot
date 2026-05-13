@@ -1,5 +1,7 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
+import { withTimeout } from "@/src/lib/bitrixbot/async-timeout";
+import { prepareNotificationsForMissedCallCase } from "@/src/lib/bitrixbot/prepare-notifications-for-missed-call-case";
 import {
   upsertMissedCallCaseFromEvent,
   type UpsertMissedCallCaseResult
@@ -18,13 +20,17 @@ const DEFAULT_LIMIT = 100;
 /** During diagnostics: cap work per run (was 500). */
 const MAX_EFFECTIVE_LIMIT = 100;
 const MAX_CANDIDATE_FETCH = 500;
-const UPSERT_TIMEOUT_MS = 10_000;
+/** Только upsert кейса + mark processing (без prepare notifications). */
+const CASE_UPSERT_TIMEOUT_MS = 12_000;
+const PREPARE_NOTIFICATIONS_TIMEOUT_MS = 4_500;
 
 export type EmployeeNotFoundAgg = {
   managerBitrixUserId: string | null;
   count: number;
   sampleCallEventIds: string[];
   samplePhones: string[];
+  /** Primary delivery создан напрямую на manager_bitrix_user_id (fallback). */
+  deliveryFallbackUsed: boolean;
 };
 
 export type UpsertFailureDiag = {
@@ -55,21 +61,10 @@ function formatSupabaseError(
   throw new Error(`${ctx}: ${parts.join(" | ")}`);
 }
 
-async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label}: timeout after ${ms}ms`)), ms);
-  });
-  try {
-    return await Promise.race([promise, deadline]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
 function mergeEmployeeNotFoundHit(
   map: Map<string, EmployeeNotFoundAgg>,
-  hit: NonNullable<UpsertMissedCallCaseResult["employeeNotFoundHit"]>
+  hit: NonNullable<UpsertMissedCallCaseResult["employeeNotFoundHit"]>,
+  deliveryFallbackUsed: boolean
 ) {
   const norm = normalizeBitrixUserId(hit.managerBitrixUserId);
   const mapKey = norm ?? "__null__";
@@ -79,9 +74,11 @@ function mergeEmployeeNotFoundHit(
       managerBitrixUserId: norm,
       count: 0,
       sampleCallEventIds: [],
-      samplePhones: []
+      samplePhones: [],
+      deliveryFallbackUsed: false
     } as EmployeeNotFoundAgg);
   cur.count++;
+  if (deliveryFallbackUsed) cur.deliveryFallbackUsed = true;
   if (cur.sampleCallEventIds.length < 8) cur.sampleCallEventIds.push(hit.callEventId);
   const ph = hit.phone?.trim() || "";
   if (ph && cur.samplePhones.length < 8 && !cur.samplePhones.includes(ph)) cur.samplePhones.push(ph);
@@ -214,7 +211,8 @@ export async function processNewMissedCallEvents(
       occurred_at: ev.occurred_at,
       phone_normalized: ev.phone_normalized,
       manager_bitrix_user_id: ev.manager_bitrix_user_id,
-      upsertTimeoutMs: UPSERT_TIMEOUT_MS
+      caseUpsertTimeoutMs: CASE_UPSERT_TIMEOUT_MS,
+      prepareNotificationsTimeoutMs: PREPARE_NOTIFICATIONS_TIMEOUT_MS
     });
 
     const diagCtx = { lastStage: "queued" };
@@ -222,7 +220,7 @@ export async function processNewMissedCallEvents(
     try {
       res = await withTimeout(
         upsertMissedCallCaseFromEvent(ev.id, diagCtx),
-        UPSERT_TIMEOUT_MS,
+        CASE_UPSERT_TIMEOUT_MS,
         `upsert:${ev.id}`
       );
     } catch (e) {
@@ -233,7 +231,7 @@ export async function processNewMissedCallEvents(
         phone: ev.phone_normalized,
         managerBitrixUserId: ev.manager_bitrix_user_id,
         occurredAt: ev.occurred_at,
-        timeoutMs: UPSERT_TIMEOUT_MS,
+        timeoutMs: CASE_UPSERT_TIMEOUT_MS,
         message: msg,
         lastKnownStage: diagCtx.lastStage
       };
@@ -249,10 +247,38 @@ export async function processNewMissedCallEvents(
       processedEvents++;
       if (res.createdCase) createdCases++;
       if (res.updatedCase) updatedCases++;
-      createdDeliveries += res.createdDeliveries;
       warnings.push(...res.warnings);
+
+      let deliveryFallbackUsed = false;
+      if (res.caseId) {
+        const prepDiag = { lastStage: "prepare_notifications_start" };
+        try {
+          const prep = await withTimeout(
+            prepareNotificationsForMissedCallCase(res.caseId, prepDiag, {
+              treatManagerAsEmployeeFallback: Boolean(res.employeeNotFoundHit)
+            }),
+            PREPARE_NOTIFICATIONS_TIMEOUT_MS,
+            `prepare_notifications:${ev.id}`
+          );
+          createdDeliveries += prep.createdDeliveriesCount;
+          warnings.push(...prep.warnings);
+          deliveryFallbackUsed = prep.managerRecipientFallbackUsed;
+        } catch (prepErr) {
+          const pmsg = prepErr instanceof Error ? prepErr.message : String(prepErr);
+          warnings.push(
+            `prepare_notifications_failed:${pmsg} lastStage=${prepDiag.lastStage} caseId=${res.caseId}`
+          );
+          console.error(`${LOG} prepare_notifications error`, {
+            callEventId: ev.id,
+            caseId: res.caseId,
+            lastStage: prepDiag.lastStage,
+            message: pmsg
+          });
+        }
+      }
+
       if (res.employeeNotFoundHit) {
-        mergeEmployeeNotFoundHit(employeeNotFoundMap, res.employeeNotFoundHit);
+        mergeEmployeeNotFoundHit(employeeNotFoundMap, res.employeeNotFoundHit, deliveryFallbackUsed);
       }
     } else if (res.status === "skipped" || res.status === "noop") {
       skippedEvents++;

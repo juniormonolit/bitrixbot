@@ -3,7 +3,6 @@ import { buildDealUrl } from "@/src/lib/bitrixbot/build-deal-url";
 import { extractCallContext } from "@/src/lib/bitrixbot/extract-call-context";
 import { isMissedInboundCallEvent } from "@/src/lib/bitrixbot/is-missed-inbound-call-event";
 import { lookupEmployeeByBitrixUserId } from "@/src/lib/bitrixbot/employee-lookup";
-import { prepareNotificationsForMissedCallCase } from "@/src/lib/bitrixbot/prepare-notifications-for-missed-call-case";
 import { safeJsonTopKeys, safeNestedKeys } from "@/src/lib/bitrixbot/payload-diag";
 import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
 
@@ -397,26 +396,13 @@ export async function upsertMissedCallCaseFromEvent(
       processing_attempts: attempts
     });
 
-    let createdDeliveries = 0;
-    try {
-      mark("prepare_notifications_start", { caseId });
-      const prep = await prepareNotificationsForMissedCallCase(caseId);
-      createdDeliveries = prep.createdDeliveriesCount;
-      warnings.push(...prep.warnings);
-      mark("prepare_notifications_done", { createdDeliveries });
-    } catch (prepErr) {
-      warnings.push(
-        `prepare_notifications_failed:${prepErr instanceof Error ? prepErr.message : String(prepErr)}`
-      );
-    }
-
     return {
       callEventId,
       status: "processed",
       caseId,
       createdCase,
       updatedCase,
-      createdDeliveries,
+      createdDeliveries: 0,
       warnings,
       error: null,
       ...(employeeNotFoundHit ? { employeeNotFoundHit } : {})
