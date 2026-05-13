@@ -148,12 +148,16 @@ export function OrgHierarchyBrowser(props: { rows: OrgHierarchyRow[]; stats: Org
             <tbody className="text-white/85">
               {filtered.map((r) => (
                 <tr key={r.id} className="border-t border-white/10 align-top">
-                  <td className="py-2 pr-2 font-mono">{r.manager_bitrix_user_id}</td>
+                  <td className="py-2 pr-2 font-mono">{String(r.manager_bitrix_user_id)}</td>
                   <td className="max-w-[10rem] py-2 pr-2 [overflow-wrap:anywhere]">{r.manager_name ?? "—"}</td>
                   <td className="max-w-[10rem] py-2 pr-2 [overflow-wrap:anywhere]">{r.department_name ?? "—"}</td>
-                  <td className="py-2 pr-2 font-mono text-[11px]">{r.rop_bitrix_user_id ?? "—"}</td>
+                  <td className="py-2 pr-2 font-mono text-[11px]">
+                    {r.rop_bitrix_user_id != null ? String(r.rop_bitrix_user_id) : "—"}
+                  </td>
                   <td className="max-w-[10rem] py-2 pr-2 [overflow-wrap:anywhere]">{r.rop_name ?? "—"}</td>
-                  <td className="py-2 pr-2 font-mono text-[11px]">{r.director_bitrix_user_id ?? "—"}</td>
+                  <td className="py-2 pr-2 font-mono text-[11px]">
+                    {r.director_bitrix_user_id != null ? String(r.director_bitrix_user_id) : "—"}
+                  </td>
                   <td className="max-w-[10rem] py-2 pr-2 [overflow-wrap:anywhere]">{r.director_name ?? "—"}</td>
                   <td className="whitespace-nowrap py-2 text-[10px] text-white/50">{r.resolved_at}</td>
                 </tr>

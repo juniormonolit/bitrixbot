@@ -306,7 +306,9 @@ export function AlertingConsole(props: {
             </Card>
             <Card title="Mirror user id">
               <div className="font-mono text-sm text-white/85">
-                {props.settings.mirror_bitrix_user_id ?? "—"}
+                {props.settings.mirror_bitrix_user_id != null
+                  ? String(props.settings.mirror_bitrix_user_id)
+                  : "—"}
               </div>
               <div className="mt-1 text-[10px] text-white/45">Дефолт пресетов: {DEFAULT_MIRROR_BITRIX_USER_ID}</div>
             </Card>
@@ -601,8 +603,8 @@ export function AlertingConsole(props: {
                       <td className="py-2">{String(c.status ?? "")}</td>
                       <td className="py-2">{String(c.phone_normalized ?? "")}</td>
                       <td className="py-2">{String(c.manager_name ?? "")}</td>
-                      <td className="py-2">{c.deal_id ?? ""}</td>
-                      <td className="py-2">{c.missed_count ?? ""}</td>
+                      <td className="py-2">{String(c.deal_id ?? "")}</td>
+                      <td className="py-2">{String(c.missed_count ?? "")}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -633,8 +635,8 @@ export function AlertingConsole(props: {
                         <td className="py-2">{String(d.recipient_role ?? "")}</td>
                         <td className="max-w-[14ch] py-2 [overflow-wrap:anywhere] text-[11px]">
                           {d.recipient_name ?? "—"}{" "}
-                          {d.recipient_bitrix_user_id ? (
-                            <span className="text-white/50">({d.recipient_bitrix_user_id})</span>
+                          {d.recipient_bitrix_user_id != null ? (
+                            <span className="text-white/50">({String(d.recipient_bitrix_user_id)})</span>
                           ) : null}
                         </td>
                         <td className="py-2">
@@ -767,8 +769,8 @@ export function AlertingConsole(props: {
                   <tbody className="text-white/80">
                     {props.managerCallDiagnostics.missingManagers.map((m) => (
                       <tr key={m.managerBitrixUserId} className="border-t border-white/10 align-top">
-                        <td className="py-2 font-mono">{m.managerBitrixUserId}</td>
-                        <td className="py-2">{m.callCount}</td>
+                        <td className="py-2 font-mono">{String(m.managerBitrixUserId)}</td>
+                        <td className="py-2">{String(m.callCount)}</td>
                         <td className="py-2">{m.foundInHierarchy ? "да" : "нет"}</td>
                         <td className="max-w-[10rem] py-2 [overflow-wrap:anywhere] text-[11px]">
                           {m.samplePhones.join(", ") || "—"}
