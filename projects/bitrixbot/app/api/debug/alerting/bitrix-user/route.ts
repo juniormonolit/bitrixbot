@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { bitrixCall } from "@/lib/bitrix/client";
+import {
+  normalizeDepartmentIdList,
+  resolveBitrixUserDepartmentIds
+} from "@/lib/bitrix/bitrix-user-departments";
 import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
 
 function isAuthorized(req: Request): boolean {
@@ -17,12 +21,6 @@ function asBoolish(v: unknown): boolean | null {
   if (v === true || v === "Y" || v === "y" || v === 1 || v === "1") return true;
   if (v === false || v === "N" || v === "n" || v === 0 || v === "0") return false;
   return null;
-}
-
-function normalizeDeptIds(v: unknown): string[] {
-  if (!v) return [];
-  if (Array.isArray(v)) return v.map((x) => String(x)).filter(Boolean);
-  return [String(v)].filter(Boolean);
 }
 
 function displayName(u: BitrixUserRecord): string {
@@ -77,7 +75,11 @@ export async function GET(req: Request) {
     }
 
     const active = asBoolish(user.ACTIVE);
-    const ufDept = normalizeDeptIds(user.UF_DEPARTMENT);
+    const ufDept = normalizeDepartmentIdList(user.UF_DEPARTMENT);
+    const resolvedDepartmentBitrixIds = resolveBitrixUserDepartmentIds(
+      user.UF_DEPARTMENT,
+      user.WORK_DEPARTMENT
+    );
     const workDept =
       typeof user.WORK_DEPARTMENT === "string"
         ? user.WORK_DEPARTMENT.trim()
@@ -109,6 +111,7 @@ export async function GET(req: Request) {
       workPosition: user.WORK_POSITION ?? null,
       workDepartment: workDept || null,
       ufDepartmentIds: ufDept,
+      resolvedDepartmentBitrixIds,
       userType: user.USER_TYPE ?? null,
       lastActivityDate: user.LAST_ACTIVITY_DATE ?? null,
       rawUser: user,

@@ -7,6 +7,7 @@ import {
 export type SyncOrgStructureFromBitrixResult = {
   departmentsUpserted: number;
   employeesUpserted: number;
+  employeesSkipped: number;
   hierarchy: RebuildHierarchyResult;
 };
 
@@ -15,7 +16,7 @@ export type SyncOrgStructureFromBitrixResult = {
  */
 export async function syncOrgStructureFromBitrixAndRebuild(): Promise<SyncOrgStructureFromBitrixResult> {
   const { upserted: departmentsUpserted } = await syncDepartments();
-  const { upserted: employeesUpserted } = await syncEmployees();
+  const { upserted: employeesUpserted, skipped: employeesSkipped } = await syncEmployees();
   const hierarchy = await rebuildOrgResolvedHierarchy();
-  return { departmentsUpserted, employeesUpserted, hierarchy };
+  return { departmentsUpserted, employeesUpserted, employeesSkipped, hierarchy };
 }

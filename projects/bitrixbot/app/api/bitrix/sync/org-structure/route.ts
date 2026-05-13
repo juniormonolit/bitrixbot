@@ -25,7 +25,7 @@ export async function POST() {
     const users = await fetchBitrixUsers();
     console.log("[bitrix-org-sync] fetched users count", { count: users.length });
 
-    const { upserted: employeesUpserted } = await syncEmployees();
+    const { upserted: employeesUpserted, skipped } = await syncEmployees();
     console.log("[bitrix-org-sync] synced users count", { count: employeesUpserted });
 
     console.log("[bitrix-org-sync] done", {
@@ -37,7 +37,8 @@ export async function POST() {
     return NextResponse.json({
       ok: true,
       departmentsUpserted,
-      employeesUpserted
+      employeesUpserted,
+      employeesSkipped: skipped
     });
   } catch (e) {
     console.log("[bitrix-org-sync] error", {
