@@ -15,6 +15,8 @@ type CallEventRow = {
   occurred_at: string;
   phone_normalized: string | null;
   manager_bitrix_user_id: string | null;
+  call_type_raw: string | null;
+  failed_code: string | null;
 };
 
 const DEFAULT_LIMIT = 100;
@@ -183,7 +185,25 @@ export type ProcessNewMissedCallEventsSummary = {
   effectiveLimit: number;
   /** Сколько событий отфильтровано helper’ом по причине (см. bucketSkipReason). */
   skippedReasons: Record<string, number>;
+  /** Сводка по сырому набору кандидатов (после SQL, до фильтра processing). Первые 10 id и телефонов. */
+  fetchedCandidateIds: string[];
+  fetchedCandidatePhones: string[];
+  /** Уникальные call_type_raw / failed_code среди выбранных кандидатов. */
+  fetchedCandidateCallTypes: string[];
+  fetchedCandidateFailedCodes: string[];
 };
+
+function uniqNonEmpty(vals: (string | null | undefined)[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const v of vals) {
+    const s = typeof v === "string" ? v.trim() : "";
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
 
 const emptyDealEnrichment = (): DealEnrichmentSummary => ({
   found: 0,
@@ -218,47 +238,32 @@ export async function processNewMissedCallEvents(
   console.log(`${LOG} start`, { inputLimit: limit, effectiveLimit, candidateFetchSize });
 
   console.log(`${LOG} before candidate call_events query`);
-  const baseCandidateQuery = () =>
-    supabase
-      .from("call_events")
-      .select("id, occurred_at, phone_normalized, manager_bitrix_user_id")
-      .eq("call_type_raw", "2")
-      .eq("failed_code", "304")
-      .not("manager_bitrix_user_id", "is", null)
-      .not("phone_normalized", "is", null);
+  const { data: candidates, error: candErr } = await supabase
+    .from("call_events")
+    .select("id, occurred_at, phone_normalized, manager_bitrix_user_id, call_type_raw, failed_code")
+    .eq("call_type_raw", "2")
+    .eq("failed_code", "304")
+    .not("manager_bitrix_user_id", "is", null)
+    .not("phone_normalized", "is", null)
+    .order("occurred_at", { ascending: false })
+    .limit(candidateFetchSize);
 
-  const [{ data: candEventLower, error: candErrLower }, { data: candEventUpper, error: candErrUpper }] =
-    await Promise.all([
-      baseCandidateQuery()
-        .contains("raw_payload", { event: "ONVOXIMPLANTCALLEND" })
-        .order("occurred_at", { ascending: false })
-        .limit(candidateFetchSize),
-      baseCandidateQuery()
-        .contains("raw_payload", { EVENT: "ONVOXIMPLANTCALLEND" })
-        .order("occurred_at", { ascending: false })
-        .limit(candidateFetchSize)
-    ]);
-
-  const candErr = candErrLower ?? candErrUpper;
   if (candErr) {
     console.error(`${LOG} candidate call_events error`, candErr);
-    formatSupabaseError(
-      "call_events.select(strict_missed:type2_fc304_mgr_phone_json_event_or_EVENT)",
-      candErr
-    );
+    formatSupabaseError("call_events.select(columns_only:type2_fc304_mgr_phone)", candErr);
   }
 
-  const mergedCandidates = [...(candEventLower ?? []), ...(candEventUpper ?? [])];
-  const byCandidateId = new Map<string, CallEventRow>();
-  for (const r of mergedCandidates) {
-    byCandidateId.set((r as CallEventRow).id, r as CallEventRow);
-  }
-  const rows = [...byCandidateId.values()].sort(
-    (a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime()
-  ).slice(0, candidateFetchSize);
+  const rows = (candidates ?? []) as CallEventRow[];
   console.log(`${LOG} after candidate call_events`, { count: rows.length, error: null });
 
   const fetchedCandidateEvents = rows.length;
+  const fetchedCandidateIds = rows.slice(0, 10).map((r) => r.id);
+  const fetchedCandidatePhones = rows
+    .slice(0, 10)
+    .map((r) => r.phone_normalized?.trim() ?? "")
+    .filter(Boolean);
+  const fetchedCandidateCallTypes = uniqNonEmpty(rows.map((r) => r.call_type_raw));
+  const fetchedCandidateFailedCodes = uniqNonEmpty(rows.map((r) => r.failed_code));
 
   if (rows.length === 0) {
     const emptySummary: ProcessNewMissedCallEventsSummary = {
@@ -279,7 +284,11 @@ export async function processNewMissedCallEvents(
       alreadyProcessedCandidates: 0,
       unprocessedCandidates: 0,
       effectiveLimit,
-      skippedReasons: {}
+      skippedReasons: {},
+      fetchedCandidateIds: [],
+      fetchedCandidatePhones: [],
+      fetchedCandidateCallTypes: [],
+      fetchedCandidateFailedCodes: []
     };
     console.log(`${LOG} finish summary (no candidates)`, emptySummary);
     return emptySummary;
@@ -461,7 +470,11 @@ export async function processNewMissedCallEvents(
     alreadyProcessedCandidates,
     unprocessedCandidates,
     effectiveLimit,
-    skippedReasons
+    skippedReasons,
+    fetchedCandidateIds,
+    fetchedCandidatePhones,
+    fetchedCandidateCallTypes,
+    fetchedCandidateFailedCodes
   };
   console.log(`${LOG} finish summary`, summary);
   return summary;
