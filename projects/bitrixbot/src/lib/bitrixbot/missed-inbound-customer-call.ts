@@ -1,12 +1,6 @@
 import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
-import { callEventHasOutboundSignals, resolveCallTypeDigits } from "@/src/lib/bitrixbot/call-event-outbound";
-import {
-  buildMissedDiagSnapshot,
-  extractVoximplantDataPayload,
-  isStrictlyMissedInboundPayload,
-  payloadIndicatesInboundCallWasAnsweredOrCompleted,
-  type MissedDiagSnapshot
-} from "@/src/lib/bitrixbot/voximplant-inbound-missed";
+import { resolveCallTypeDigits } from "@/src/lib/bitrixbot/call-event-outbound";
+import { extractVoximplantDataPayload } from "@/src/lib/bitrixbot/voximplant-inbound-missed";
 
 type JsonObject = Record<string, unknown>;
 
@@ -24,190 +18,105 @@ function getString(value: unknown): string | null {
   return null;
 }
 
-function digitsOnly(value: string): string {
-  return value.replace(/\D/g, "");
+function webhookEventName(raw_payload: unknown): string | null {
+  const root = getObj(raw_payload);
+  return getString(root.event) ?? getString(root.EVENT);
 }
 
-function isLikelyInternalOrAppPhone(phone: string): boolean {
-  const raw = phone.trim();
-  if (!raw) return true;
-  const lower = raw.toLowerCase();
-  if (lower.includes("rest_app") || lower.includes("restapp") || lower.includes("sip:")) return true;
-  const d = digitsOnly(raw);
-  if (d.length > 0 && d.length <= 4) return true;
-  return false;
+/** Все ненулевые источники failed-кода должны быть ровно "304" (колонка и/или payload). */
+function failedCodesAgreeStrictly304(callEvent: CallEventForInboundFilter): boolean {
+  const col = callEvent.failed_code?.trim() ?? "";
+  const data = extractVoximplantDataPayload(callEvent.raw_payload);
+  const payload = getString(data.CALL_FAILED_CODE) ?? "";
+  const parts = [col, payload].filter((x) => x !== "");
+  if (parts.length === 0) return false;
+  return parts.every((c) => c === "304");
 }
 
 export type MissedInboundCustomerCallEval =
   | { ok: true }
   | {
       ok: false;
-      reason: string;
+      reason:
+        | "skip_not_call_end"
+        | "skip_not_inbound_call_type"
+        | "skip_not_missed_failed_code"
+        | "skip_missing_manager"
+        | "skip_missing_phone";
       callType?: string | null;
       event?: string | null;
-      missedDiag?: MissedDiagSnapshot;
     };
 
 export type CallEventForInboundFilter = {
   id: string;
-  status: string;
   raw_payload: unknown;
   phone_normalized?: string | null;
   manager_bitrix_user_id?: string | null;
-  /** From call_events.call_type_raw — fallback if payload omits CALL_TYPE. */
   call_type_raw?: string | null;
-  /** From call_events.call_direction — secondary guard for outbound (same ingest as CALL_TYPE). */
+  failed_code?: string | null;
+  /** Не участвует в решении о missed кейсе — остаётся в типе для совместимости загрузки строк. */
+  status?: string;
   call_direction?: string | null;
   call_duration_seconds?: number | null;
-  failed_code?: string | null;
 };
 
-/**
- * Человекочитаемая причина для логов (без префикса skip_).
- */
+/** Для логов (убираем префикс skip_). */
 export function filterSkipReasonLabel(reason: string): string {
   return reason.replace(/^skip_/, "");
 }
 
 /**
- * Bitrix Voximplant telephony (typical mapping):
- * - CALL_TYPE 1 = outbound, 2 = inbound. Type 3 is not treated as customer inbound here.
+ * Строго по данным Bitrix/Voximplant: только ONVOXIMPLANTCALLEND + входящий (2) + 304 + менеджер + номер в БД.
  */
-export function evaluateMissedInboundCustomerCall(callEvent: CallEventForInboundFilter): MissedInboundCustomerCallEval {
-  const root = getObj(callEvent.raw_payload);
-  const eventName = getString(root.event) ?? getString(root.EVENT);
-  if (eventName && eventName !== "ONVOXIMPLANTCALLEND") {
-    return { ok: false, reason: "skip_call_event_not_final", event: eventName };
-  }
+export function evaluateMissedInboundCustomerCall(
+  callEvent: CallEventForInboundFilter
+): MissedInboundCustomerCallEval {
+  const eventName = webhookEventName(callEvent.raw_payload);
+  const callType = resolveCallTypeDigits(callEvent).trim();
 
-  const data = getObj(root.data ?? root.DATA);
-  const missedDiag = buildMissedDiagSnapshot({
-    status: callEvent.status,
-    call_duration_seconds: callEvent.call_duration_seconds,
-    failed_code: callEvent.failed_code,
-    raw_payload: callEvent.raw_payload
-  });
-
-  if (callEventHasOutboundSignals(callEvent)) {
-    const ct = resolveCallTypeDigits(callEvent).trim();
+  if (eventName !== "ONVOXIMPLANTCALLEND") {
     return {
       ok: false,
-      reason: "skip_outgoing_call",
-      callType: ct || callEvent.call_type_raw?.trim() || null,
+      reason: "skip_not_call_end",
       event: eventName,
-      missedDiag
+      callType: callType || null
     };
   }
 
-  const callType = resolveCallTypeDigits(callEvent).trim();
-
-  if (callType === "3") {
-    return { ok: false, reason: "skip_call_type_3", callType, event: eventName, missedDiag };
-  }
   if (callType !== "2") {
     return {
       ok: false,
-      reason: "skip_unknown_call_type",
-      callType: callType || null,
+      reason: "skip_not_inbound_call_type",
       event: eventName,
-      missedDiag
+      callType: callType || null
     };
   }
 
-  const colDur = callEvent.call_duration_seconds;
-  if (typeof colDur === "number" && Number.isFinite(colDur) && colDur > 0) {
+  if (!failedCodesAgreeStrictly304(callEvent)) {
     return {
       ok: false,
-      reason: "skip_not_missed_positive_duration_column",
-      callType,
+      reason: "skip_not_missed_failed_code",
       event: eventName,
-      missedDiag
+      callType
     };
   }
 
-  if (payloadIndicatesInboundCallWasAnsweredOrCompleted(data)) {
-    return {
-      ok: false,
-      reason: "skip_not_missed_answered_or_completed_payload",
-      callType,
-      event: eventName,
-      missedDiag
-    };
-  }
-
-  const dbStatus = callEvent.status?.trim() ?? "";
-  if (dbStatus === "success") {
-    return {
-      ok: false,
-      reason: "skip_not_missed_status",
-      callType,
-      event: eventName,
-      missedDiag
-    };
-  }
-  /** Ingest may store ambiguous inbound rings as `other`; alerting only proceeds with strict missed payload. */
-  if (dbStatus !== "missed" && dbStatus !== "other") {
-    return {
-      ok: false,
-      reason: "skip_not_missed_status",
-      callType,
-      event: eventName,
-      missedDiag
-    };
-  }
-
-  if (!isStrictlyMissedInboundPayload(data)) {
-    return {
-      ok: false,
-      reason: "skip_not_missed_strict_payload",
-      callType,
-      event: eventName,
-      missedDiag
-    };
-  }
-
-  const phone =
-    getString(data.PHONE_NUMBER) ??
-    getString(data.phone) ??
-    (callEvent.phone_normalized?.trim() ? callEvent.phone_normalized.trim() : null);
-  if (!phone) {
-    return { ok: false, reason: "skip_missing_phone", callType, event: eventName, missedDiag };
-  }
-
-  if (isLikelyInternalOrAppPhone(phone)) {
-    return {
-      ok: false,
-      reason: "skip_phone_internal_like",
-      callType,
-      event: eventName,
-      missedDiag
-    };
-  }
-
-  const portalNum = getString(data.PORTAL_NUMBER) ?? getString(data.portal_number);
-  if (portalNum) {
-    const a = digitsOnly(phone);
-    const b = digitsOnly(portalNum);
-    if (a.length > 0 && b.length > 0 && a === b) {
-      return {
-        ok: false,
-        reason: "skip_phone_same_as_portal",
-        callType,
-        event: eventName,
-        missedDiag
-      };
-    }
-  }
-
-  /** Cases/deliveries must anchor on persisted manager id from ingest (`call_events.manager_bitrix_user_id`). */
-  const managerCol = normalizeBitrixUserId(callEvent.manager_bitrix_user_id);
-  if (!managerCol) {
+  if (!normalizeBitrixUserId(callEvent.manager_bitrix_user_id)) {
     return {
       ok: false,
       reason: "skip_missing_manager",
-      callType,
       event: eventName,
-      missedDiag
+      callType
+    };
+  }
+
+  const phoneNorm = callEvent.phone_normalized?.trim() ?? "";
+  if (!phoneNorm) {
+    return {
+      ok: false,
+      reason: "skip_missing_phone",
+      event: eventName,
+      callType
     };
   }
 
@@ -218,16 +127,6 @@ export function isMissedInboundCustomerCall(callEvent: CallEventForInboundFilter
   return evaluateMissedInboundCustomerCall(callEvent).ok;
 }
 
-/** Узкий helper: входящий + реально пропущенный по колонкам и payload (без телефона/менеджера). */
 export function isActuallyMissedInboundCallEvent(callEvent: CallEventForInboundFilter): boolean {
-  if (!normalizeBitrixUserId(callEvent.manager_bitrix_user_id)) return false;
-  if (callEventHasOutboundSignals(callEvent)) return false;
-  if (resolveCallTypeDigits(callEvent).trim() !== "2") return false;
-  const colDur = callEvent.call_duration_seconds;
-  if (typeof colDur === "number" && Number.isFinite(colDur) && colDur > 0) return false;
-  const data = extractVoximplantDataPayload(callEvent.raw_payload);
-  if (payloadIndicatesInboundCallWasAnsweredOrCompleted(data)) return false;
-  const st = callEvent.status?.trim() ?? "";
-  if (st !== "missed" && st !== "other") return false;
-  return isStrictlyMissedInboundPayload(data);
+  return isMissedInboundCustomerCall(callEvent);
 }

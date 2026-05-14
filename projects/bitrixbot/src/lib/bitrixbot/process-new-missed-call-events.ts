@@ -104,28 +104,16 @@ function clampEffectiveLimit(limit: number | undefined): number {
 /** Агрегат для summary: детальные причины filter skip (ключи без префикса skip_). */
 function bucketSkipReason(reason: string): string {
   switch (reason) {
-    case "skip_outgoing_call":
-      return "outgoing_call";
-    case "skip_unknown_call_type":
-    case "skip_call_type_3":
-      return "unknown_call_type";
-    case "skip_not_inbound":
-      return "not_inbound";
-    case "skip_call_event_not_final":
-      return "not_final_event";
-    case "skip_not_missed":
-    case "skip_not_missed_status":
-    case "skip_not_missed_positive_duration_column":
-    case "skip_not_missed_answered_or_completed_payload":
-    case "skip_not_missed_strict_payload":
-      return "not_missed";
-    case "skip_missing_phone":
-    case "skip_phone_same_as_portal":
-    case "skip_phone_internal_like":
-      return "missing_or_invalid_phone";
+    case "skip_not_call_end":
+      return "not_call_end";
+    case "skip_not_inbound_call_type":
+      return "not_inbound_call_type";
+    case "skip_not_missed_failed_code":
+      return "not_missed_failed_code";
     case "skip_missing_manager":
-    case "skip_missing_manager_portal_user":
       return "missing_manager";
+    case "skip_missing_phone":
+      return "missing_phone";
     default:
       return reason.replace(/^skip_/, "");
   }
@@ -230,21 +218,44 @@ export async function processNewMissedCallEvents(
   console.log(`${LOG} start`, { inputLimit: limit, effectiveLimit, candidateFetchSize });
 
   console.log(`${LOG} before candidate call_events query`);
-  const { data: candidates, error: candErr } = await supabase
-    .from("call_events")
-    .select("id, occurred_at, phone_normalized, manager_bitrix_user_id")
-    .in("status", ["missed", "other"])
-    .eq("call_type_raw", "2")
-    .neq("call_direction", "outbound")
-    .or("call_duration_seconds.is.null,call_duration_seconds.eq.0")
-    .order("occurred_at", { ascending: false })
-    .limit(candidateFetchSize);
+  const baseCandidateQuery = () =>
+    supabase
+      .from("call_events")
+      .select("id, occurred_at, phone_normalized, manager_bitrix_user_id")
+      .eq("call_type_raw", "2")
+      .eq("failed_code", "304")
+      .not("manager_bitrix_user_id", "is", null)
+      .not("phone_normalized", "is", null);
 
+  const [{ data: candEventLower, error: candErrLower }, { data: candEventUpper, error: candErrUpper }] =
+    await Promise.all([
+      baseCandidateQuery()
+        .contains("raw_payload", { event: "ONVOXIMPLANTCALLEND" })
+        .order("occurred_at", { ascending: false })
+        .limit(candidateFetchSize),
+      baseCandidateQuery()
+        .contains("raw_payload", { EVENT: "ONVOXIMPLANTCALLEND" })
+        .order("occurred_at", { ascending: false })
+        .limit(candidateFetchSize)
+    ]);
+
+  const candErr = candErrLower ?? candErrUpper;
   if (candErr) {
     console.error(`${LOG} candidate call_events error`, candErr);
-    formatSupabaseError("call_events.select(inbound_type2_non_outbound_duration0_missed_or_other)", candErr);
+    formatSupabaseError(
+      "call_events.select(strict_missed:type2_fc304_mgr_phone_json_event_or_EVENT)",
+      candErr
+    );
   }
-  const rows = (candidates ?? []) as CallEventRow[];
+
+  const mergedCandidates = [...(candEventLower ?? []), ...(candEventUpper ?? [])];
+  const byCandidateId = new Map<string, CallEventRow>();
+  for (const r of mergedCandidates) {
+    byCandidateId.set((r as CallEventRow).id, r as CallEventRow);
+  }
+  const rows = [...byCandidateId.values()].sort(
+    (a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime()
+  ).slice(0, candidateFetchSize);
   console.log(`${LOG} after candidate call_events`, { count: rows.length, error: null });
 
   const fetchedCandidateEvents = rows.length;

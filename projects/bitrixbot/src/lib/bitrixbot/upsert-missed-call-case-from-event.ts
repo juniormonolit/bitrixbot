@@ -9,6 +9,7 @@ import {
   evaluateMissedInboundCustomerCall,
   filterSkipReasonLabel
 } from "@/src/lib/bitrixbot/missed-inbound-customer-call";
+import { extractVoximplantDataPayload } from "@/src/lib/bitrixbot/voximplant-inbound-missed";
 import { lookupEmployeeByBitrixUserId } from "@/src/lib/bitrixbot/employee-lookup";
 import { safeJsonTopKeys, safeNestedKeys } from "@/src/lib/bitrixbot/payload-diag";
 import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
@@ -264,9 +265,13 @@ export async function upsertMissedCallCaseFromEvent(
     const inboundEval = evaluateMissedInboundCustomerCall(ce);
     if (!inboundEval.ok) {
       const phoneLog = ce.phone_normalized?.trim() ?? "";
-      const md = inboundEval.missedDiag;
+      const data = extractVoximplantDataPayload(ce.raw_payload);
+      const fcPayload =
+        typeof data.CALL_FAILED_CODE === "string" || typeof data.CALL_FAILED_CODE === "number"
+          ? String(data.CALL_FAILED_CODE)
+          : "";
       console.log(
-        `[missed-call-filter] skip reason=${filterSkipReasonLabel(inboundEval.reason)} callEventId=${ce.id} callType=${inboundEval.callType ?? ""} direction=${ce.call_direction ?? ""} status=${md?.dbStatus ?? ce.status} duration=${md?.durationPayload ?? ""}/${md?.durationColumn ?? ""} failedCode=${md?.failedCodePayload ?? ""}/${md?.failedCodeColumn ?? ""} callStatus=${md?.callStatusTokens ?? ""} event=${inboundEval.event ?? ""} phone=${phoneLog} case=none`
+        `[missed-call-filter] skip reason=${filterSkipReasonLabel(inboundEval.reason)} callEventId=${ce.id} callType=${inboundEval.callType ?? ce.call_type_raw ?? ""} failedCode=${fcPayload}/${ce.failed_code ?? ""} event=${inboundEval.event ?? ""} phone=${phoneLog} case=none`
       );
       await markProcessing(supabase, processing.id, {
         processing_status: "skipped",
