@@ -165,6 +165,8 @@ export type ProcessNewMissedCallEventsSummary = {
   createdCases: number;
   updatedCases: number;
   createdDeliveries: number;
+  /** Доставки не созданы из-за коллизии с dedupe по alert_rule/recipient (ожидаемо при гонках). */
+  skippedDuplicateDeliveries: number;
   warnings: string[];
   /** Сгруппировано по manager Bitrix id (без дублей в сотнях строк). */
   employeeNotFound: EmployeeNotFoundAgg[];
@@ -275,6 +277,7 @@ export async function processNewMissedCallEvents(
       createdCases: 0,
       updatedCases: 0,
       createdDeliveries: 0,
+      skippedDuplicateDeliveries: 0,
       warnings,
       employeeNotFound: [],
       upsertFailures: [],
@@ -346,6 +349,7 @@ export async function processNewMissedCallEvents(
   let createdCases = 0;
   let updatedCases = 0;
   let createdDeliveries = 0;
+  let skippedDuplicateDeliveries = 0;
   const skippedReasons: Record<string, number> = {};
   const dealEnrichment = emptyDealEnrichment();
   let recoverableUpsertErrors = 0;
@@ -421,6 +425,7 @@ export async function processNewMissedCallEvents(
             `prepare_notifications:${ev.id}`
           );
           createdDeliveries += prep.createdDeliveriesCount;
+          skippedDuplicateDeliveries += prep.skippedDuplicateDeliveries;
           warnings.push(...prep.warnings);
           deliveryFallbackUsed = prep.managerRecipientFallbackUsed;
         } catch (prepErr) {
@@ -471,6 +476,7 @@ export async function processNewMissedCallEvents(
     createdCases,
     updatedCases,
     createdDeliveries,
+    skippedDuplicateDeliveries,
     warnings,
     employeeNotFound,
     upsertFailures,

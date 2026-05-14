@@ -19,6 +19,20 @@ const DB_OP_MS = 2_500;
 const DELIVERY_INSERT_TIMEOUT_MS = 6_000;
 const RULES_PAGE = 500;
 
+/** Unique index from migration `notification_deliveries_alert_rule_recipient_dedupe_idx`. */
+const NOTIFICATION_DELIVERIES_ALERT_RULE_RECIPIENT_DEDUPE_MARKER =
+  "notification_deliveries_alert_rule_recipient_dedupe";
+
+function isAlertRuleRecipientDedupeViolation(err: {
+  code?: string;
+  message?: string;
+  details?: string | null;
+} | null): boolean {
+  if (!err || err.code !== "23505") return false;
+  const blob = `${err.message ?? ""} ${err.details ?? ""}`;
+  return blob.includes(NOTIFICATION_DELIVERIES_ALERT_RULE_RECIPIENT_DEDUPE_MARKER);
+}
+
 export type PrepareNotificationsDiag = { lastStage: string };
 
 export type PrepareNotificationsOptions = {
@@ -59,6 +73,8 @@ export type PrepareNotificationsResult = {
   /** Last alert rule id that matched conditions in this run (by sort_order). */
   selectedRuleId: string | null;
   createdDeliveriesCount: number;
+  /** Rows skipped due to unique index `notification_deliveries_alert_rule_recipient_dedupe_idx`. */
+  skippedDuplicateDeliveries: number;
   skippedRecipients: { role: string; reason: string }[];
   warnings: string[];
   managerRecipientFallbackUsed: boolean;
@@ -148,6 +164,7 @@ export async function prepareNotificationsForMissedCallCase(
   const warnings: string[] = [];
   const skippedRecipients: { role: string; reason: string }[] = [];
   let managerRecipientFallbackUsed = false;
+  let skippedDuplicateDeliveries = 0;
   const treatFb = Boolean(options?.treatManagerAsEmployeeFallback);
 
   mark(diag, "prepare_notifications_start", { caseId });
@@ -170,6 +187,7 @@ export async function prepareNotificationsForMissedCallCase(
       caseId,
       selectedRuleId: null,
       createdDeliveriesCount: 0,
+      skippedDuplicateDeliveries: 0,
       skippedRecipients: [],
       warnings: ["case_not_found"],
       managerRecipientFallbackUsed: false
@@ -186,6 +204,7 @@ export async function prepareNotificationsForMissedCallCase(
       caseId: typedCase.id,
       selectedRuleId: null,
       createdDeliveriesCount: 0,
+      skippedDuplicateDeliveries: 0,
       skippedRecipients: [],
       warnings,
       managerRecipientFallbackUsed: false
@@ -207,6 +226,7 @@ export async function prepareNotificationsForMissedCallCase(
       caseId: typedCase.id,
       selectedRuleId: null,
       createdDeliveriesCount: 0,
+      skippedDuplicateDeliveries: 0,
       skippedRecipients,
       warnings,
       managerRecipientFallbackUsed: false
@@ -243,6 +263,7 @@ export async function prepareNotificationsForMissedCallCase(
       caseId: typedCase.id,
       selectedRuleId: null,
       createdDeliveriesCount: 0,
+      skippedDuplicateDeliveries: 0,
       skippedRecipients,
       warnings,
       managerRecipientFallbackUsed: false
@@ -346,7 +367,19 @@ export async function prepareNotificationsForMissedCallCase(
         DELIVERY_INSERT_TIMEOUT_MS,
         `notification_deliveries.insert:${r.recipient_role}`
       );
-      if (insErr) throw new Error(insErr.message);
+      if (insErr) {
+        if (isAlertRuleRecipientDedupeViolation(insErr)) {
+          skippedDuplicateDeliveries++;
+          skippedRecipients.push({ role: r.recipient_role, reason: "skipped_duplicate_delivery" });
+          console.log(`${LOG} skip_dedupe_delivery`, {
+            caseId: typedCase.id,
+            ruleId: rule.id,
+            role: r.recipient_role
+          });
+          continue;
+        }
+        throw new Error(insErr.message);
+      }
 
       created++;
       if (r.recipient_source === "call_event_manager_bitrix_user_id_fallback") {
@@ -380,6 +413,7 @@ export async function prepareNotificationsForMissedCallCase(
     caseId: typedCase.id,
     selectedRuleId: lastMatchedRuleId,
     createdDeliveriesCount: created,
+    skippedDuplicateDeliveries,
     skippedRecipients,
     warnings,
     managerRecipientFallbackUsed

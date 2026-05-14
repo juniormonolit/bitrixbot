@@ -19,6 +19,7 @@ export type NoCallbackEscalationsSummary = {
   skipped: number;
   failed: number;
   createdDeliveries: number;
+  skippedDuplicateDeliveries: number;
   warnings: string[];
 };
 
@@ -86,6 +87,7 @@ export async function processNoCallbackEscalations(
   let skipped = 0;
   let failed = 0;
   let createdDeliveries = 0;
+  let skippedDuplicateDeliveries = 0;
 
   for (const row of (cases ?? []) as CaseRow[]) {
     try {
@@ -133,6 +135,7 @@ export async function processNoCallbackEscalations(
 
       const prep = await prepareNotificationsForMissedCallCase(row.id);
       createdDeliveries += prep.createdDeliveriesCount;
+      skippedDuplicateDeliveries += prep.skippedDuplicateDeliveries;
       warnings.push(...prep.warnings.map((w) => `${row.id}:${w}`));
 
       executed++;
@@ -150,6 +153,7 @@ export async function processNoCallbackEscalations(
     skipped,
     failed,
     createdDeliveries,
+    skippedDuplicateDeliveries,
     warnings
   };
 }

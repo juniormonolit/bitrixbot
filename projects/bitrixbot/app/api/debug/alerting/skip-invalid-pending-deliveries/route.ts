@@ -47,7 +47,7 @@ export async function POST(req: Request) {
   const startedAt = Date.now();
   try {
     const supabase = createServiceRoleClient();
-    const summary = await skipInvalidPendingDeliveries(supabase, limit);
+    const summary = await skipInvalidPendingDeliveries(supabase, limit, 30);
     const durationMs = Date.now() - startedAt;
     console.log(`${ROUTE_LOG} success`, { durationMs, summary });
     return NextResponse.json({ ok: true, durationMs, summary });

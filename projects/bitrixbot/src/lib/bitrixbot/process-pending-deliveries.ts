@@ -126,14 +126,9 @@ export async function processPendingDeliveries(
     : "live";
 
   const supabase = createServiceRoleClient();
-  const { data: deliveries, error } = await supabase
-    .from("notification_deliveries")
-    .select(
-      "id, case_id, rule_id, recipient_role, recipient_bitrix_user_id, recipient_name, message_text, delivery_status, created_at"
-    )
-    .eq("delivery_status", "pending")
-    .order("created_at", { ascending: true })
-    .limit(limit);
+  const { data: deliveries, error } = await supabase.rpc("fetch_valid_pending_notification_deliveries", {
+    p_limit: Math.max(1, Math.floor(limit))
+  });
   if (error) throw new Error(error.message);
 
   let sentDeliveries = 0;
@@ -269,7 +264,8 @@ export async function processPendingDeliveries(
       continue;
     }
 
-    if (!normalizeBitrixUserId(d.recipient_bitrix_user_id)) {
+    const recipientRaw = String(d.recipient_bitrix_user_id ?? "").trim();
+    if (!normalizeBitrixUserId(d.recipient_bitrix_user_id) || recipientRaw === "0") {
       const { error: updErr } = await supabase
         .from("notification_deliveries")
         .update({

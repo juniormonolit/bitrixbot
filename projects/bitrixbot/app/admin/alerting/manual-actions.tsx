@@ -277,7 +277,8 @@ export function ManualActions({ debugSecret }: { debugSecret: string }) {
       <p className="mt-2 text-xs text-white/50">
         Полный цикл: пересборка иерархии из БД → missed calls → callback → SLA → pending deliveries
         (sender учитывает kill switch, dry run, mirror-only). Обновление структуры тянет сотрудников из Bitrix,
-        затем пересобирает кэш руководителей.
+        затем пересобирает кэш руководителей. «Невалидные pending»: пустой/0 получатель, плейсхолдеры «Не назначен» в
+        тексте, или created_at старше 30 минут — поле Limit задаёт размер партии обновления за один запрос.
       </p>
 
       {lastError ? (
