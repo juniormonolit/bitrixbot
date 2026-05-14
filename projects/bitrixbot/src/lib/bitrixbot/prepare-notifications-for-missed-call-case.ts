@@ -10,7 +10,7 @@ import {
 } from "@/src/lib/bitrixbot/alert-notification-rule-engine";
 import { formatPhoneForDisplay } from "@/lib/bitrix/phone-normalize";
 import { dealUrlForMessageTemplate } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
-import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
+import { normalizeBitrixUserId, isValidAlertRecipientBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
 import { renderMessageTemplate } from "@/src/lib/bitrixbot/render-message-template";
 import { outboundActivityBlocksMissedPrepare } from "@/src/lib/bitrixbot/alerting-prepare-outbound-guard";
 
@@ -96,6 +96,11 @@ export type PrepareNotificationsResult = {
   managerRecipientFallbackUsed: boolean;
   ruleEvaluationDebug?: PrepareRuleEvaluationSnapshot[];
 };
+
+function isCaseManagerNamePlaceholderUnassigned(name: string | null | undefined): boolean {
+  const t = (name ?? "").trim().toLowerCase();
+  return t === "не назначен";
+}
 
 function mark(diag: PrepareNotificationsDiag | null | undefined, stage: string, meta?: Record<string, unknown>) {
   if (diag) diag.lastStage = stage;
@@ -232,21 +237,39 @@ export async function prepareNotificationsForMissedCallCase(
     };
   }
 
-  const caseManagerId = normalizeBitrixUserId(typedCase.manager_bitrix_user_id);
-  if (!caseManagerId) {
-    warnings.push("prepare_skipped_missing_case_manager");
-    console.log(`${LOG} skipped_no_case_manager`, { caseId });
+  if (!isValidAlertRecipientBitrixUserId(typedCase.manager_bitrix_user_id)) {
+    warnings.push("prepare_skipped_invalid_case_manager_bitrix_user_id");
+    skippedRecipients.push({ role: "case", reason: "skipped_invalid_case_manager_id" });
+    console.log(`${LOG} skipped_invalid_case_manager_id`, { caseId: typedCase.id });
     return {
       caseId: typedCase.id,
       selectedRuleId: null,
       createdDeliveriesCount: 0,
       skippedExistingDeliveries: 0,
-      skippedRecipients: [],
+      skippedRecipients,
       warnings,
       managerRecipientFallbackUsed: false,
       ...(wantRuleDebug ? { ruleEvaluationDebug: [] } : {})
     };
   }
+
+  if (isCaseManagerNamePlaceholderUnassigned(typedCase.manager_name)) {
+    warnings.push("prepare_skipped_case_manager_name_placeholder");
+    skippedRecipients.push({ role: "case", reason: "skipped_case_manager_name_ne_naznachen" });
+    console.log(`${LOG} skipped_case_manager_name_placeholder`, { caseId: typedCase.id });
+    return {
+      caseId: typedCase.id,
+      selectedRuleId: null,
+      createdDeliveriesCount: 0,
+      skippedExistingDeliveries: 0,
+      skippedRecipients,
+      warnings,
+      managerRecipientFallbackUsed: false,
+      ...(wantRuleDebug ? { ruleEvaluationDebug: [] } : {})
+    };
+  }
+
+  const caseManagerId = normalizeBitrixUserId(typedCase.manager_bitrix_user_id)!;
 
   const outboundPrepareBlock = await outboundActivityBlocksMissedPrepare(supabase, {
     phone_normalized: typedCase.phone_normalized,
@@ -382,8 +405,8 @@ export async function prepareNotificationsForMissedCallCase(
     const recipientsResolved = recipients.length;
 
     for (const r of recipients) {
-      if (!r.bitrix_user_id) {
-        skippedRecipients.push({ role: r.recipient_role, reason: "recipient_user_missing" });
+      if (!isValidAlertRecipientBitrixUserId(r.bitrix_user_id)) {
+        skippedRecipients.push({ role: r.recipient_role, reason: "skipped_invalid_recipient_bitrix_user_id" });
         continue;
       }
 
@@ -569,16 +592,27 @@ export async function explainMissedCallAlertRulesForCase(
     };
   }
 
-  const caseManagerId = normalizeBitrixUserId(typedCase.manager_bitrix_user_id);
-  if (!caseManagerId) {
+  if (!isValidAlertRecipientBitrixUserId(typedCase.manager_bitrix_user_id)) {
     return {
       caseId: typedCase.id,
       skipped: true,
-      skipReason: "missing_case_manager",
+      skipReason: "invalid_case_manager_bitrix_user_id",
       evaluations,
-      warnings: [...warnings, "prepare_skipped_missing_case_manager"]
+      warnings: [...warnings, "prepare_skipped_invalid_case_manager_bitrix_user_id"]
     };
   }
+
+  if (isCaseManagerNamePlaceholderUnassigned(typedCase.manager_name)) {
+    return {
+      caseId: typedCase.id,
+      skipped: true,
+      skipReason: "case_manager_name_placeholder",
+      evaluations,
+      warnings: [...warnings, "prepare_skipped_case_manager_name_placeholder"]
+    };
+  }
+
+  const caseManagerId = normalizeBitrixUserId(typedCase.manager_bitrix_user_id)!;
 
   const outboundPrepareBlock = await outboundActivityBlocksMissedPrepare(supabase, {
     phone_normalized: typedCase.phone_normalized,

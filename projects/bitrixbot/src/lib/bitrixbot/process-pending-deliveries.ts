@@ -8,7 +8,7 @@ import {
 } from "@/src/lib/bitrixbot/re-enrich-case-deal";
 import { sendBitrixMessage } from "@/src/lib/bitrixbot/send-bitrix-message";
 import { outboundActivityBlocksMissedPrepare } from "@/src/lib/bitrixbot/alerting-prepare-outbound-guard";
-import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
+import { isValidAlertRecipientBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
 
 type DeliveryRow = {
   id: string;
@@ -173,7 +173,7 @@ export async function processPendingDeliveries(
           manager_bitrix_user_id: string | null;
         };
 
-        if (!normalizeBitrixUserId(typedMini.manager_bitrix_user_id)) {
+        if (!isValidAlertRecipientBitrixUserId(typedMini.manager_bitrix_user_id)) {
           const { error: skipErr } = await supabase
             .from("notification_deliveries")
             .update({
@@ -264,8 +264,7 @@ export async function processPendingDeliveries(
       continue;
     }
 
-    const recipientRaw = String(d.recipient_bitrix_user_id ?? "").trim();
-    if (!normalizeBitrixUserId(d.recipient_bitrix_user_id) || recipientRaw === "0") {
+    if (!isValidAlertRecipientBitrixUserId(d.recipient_bitrix_user_id)) {
       const { error: updErr } = await supabase
         .from("notification_deliveries")
         .update({
