@@ -7,6 +7,7 @@ import {
   type DealEnrichmentCallSnapshot,
   type UpsertMissedCallCaseResult
 } from "@/src/lib/bitrixbot/upsert-missed-call-case-from-event";
+import { chunkIdsForInFilter } from "@/src/lib/bitrixbot/supabase-in-filter-chunks";
 
 const LOG = "[alerting:process-missed-calls]";
 
@@ -295,25 +296,35 @@ export async function processNewMissedCallEvents(
   }
 
   const ids = rows.map((r) => r.id);
-  console.log(`${LOG} before processing rows query`, { idCount: ids.length });
-  const { data: processingRows, error: procErr } = await supabase
-    .from("call_event_case_processing")
-    .select("call_event_id, processing_status")
-    .in("call_event_id", ids);
-  if (procErr) {
-    console.error(`${LOG} processing rows error`, procErr);
-    formatSupabaseError("call_event_case_processing.select", procErr);
+  console.log(`${LOG} before processing rows query`, {
+    idCount: ids.length,
+    inChunks: chunkIdsForInFilter(ids).length
+  });
+
+  type ProcessingPeek = { call_event_id: string; processing_status: string };
+  const processingRows: ProcessingPeek[] = [];
+  const idChunks = chunkIdsForInFilter(ids);
+  for (let ci = 0; ci < idChunks.length; ci++) {
+    const chunk = idChunks[ci];
+    const { data: chunkRows, error: procErr } = await supabase
+      .from("call_event_case_processing")
+      .select("call_event_id, processing_status")
+      .in("call_event_id", chunk);
+    if (procErr) {
+      console.error(`${LOG} processing rows error`, { chunkIndex: ci, procErr });
+      formatSupabaseError("call_event_case_processing.select(chunked)", procErr);
+    }
+    processingRows.push(...((chunkRows ?? []) as ProcessingPeek[]));
   }
+
   console.log(`${LOG} after processing rows`, {
-    count: (processingRows ?? []).length,
+    count: processingRows.length,
     error: null
   });
 
   const terminalStatuses = new Set(["processed", "skipped", "failed"]);
   const terminalByCallEvent = new Set(
-    (processingRows ?? [])
-      .filter((r) => terminalStatuses.has((r as { processing_status: string }).processing_status))
-      .map((r) => (r as { call_event_id: string }).call_event_id)
+    processingRows.filter((r) => terminalStatuses.has(r.processing_status)).map((r) => r.call_event_id)
   );
 
   const alreadyProcessedCandidates = rows.filter((r) => terminalByCallEvent.has(r.id)).length;

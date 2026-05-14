@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
+import { chunkIdsForInFilter } from "@/src/lib/bitrixbot/supabase-in-filter-chunks";
 
 function isAuthorized(req: Request): boolean {
   const header = req.headers.get("x-debug-secret") ?? "";
@@ -67,20 +68,31 @@ export async function GET(req: Request) {
   >();
 
   if (ids.length > 0) {
-    const { data: procRows, error: procErr } = await supabase
-      .from("call_event_case_processing")
-      .select("call_event_id, processing_status, case_id")
-      .in("call_event_id", ids);
+    const idChunks = chunkIdsForInFilter(ids);
+    for (let ci = 0; ci < idChunks.length; ci++) {
+      const chunk = idChunks[ci];
+      const { data: procRows, error: procErr } = await supabase
+        .from("call_event_case_processing")
+        .select("call_event_id, processing_status, case_id")
+        .in("call_event_id", chunk);
 
-    if (procErr) {
-      return NextResponse.json({ ok: false, error: procErr.message }, { status: 500 });
-    }
-    for (const p of procRows ?? []) {
-      const row = p as { call_event_id: string; processing_status: string | null; case_id: string | null };
-      procMap.set(row.call_event_id, {
-        processing_status: row.processing_status,
-        case_id: row.case_id
-      });
+      if (procErr) {
+        return NextResponse.json(
+          { ok: false, error: procErr.message, chunkIndex: ci },
+          { status: 500 }
+        );
+      }
+      for (const p of procRows ?? []) {
+        const row = p as {
+          call_event_id: string;
+          processing_status: string | null;
+          case_id: string | null;
+        };
+        procMap.set(row.call_event_id, {
+          processing_status: row.processing_status,
+          case_id: row.case_id
+        });
+      }
     }
   }
 
