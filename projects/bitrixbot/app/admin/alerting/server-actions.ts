@@ -133,10 +133,8 @@ export async function saveAlertNotificationRuleAction(formData: FormData) {
   const sort_order = Number(formData.get("sort_order") ?? 100) || 100;
   const missed_count_threshold = numOrNull(formData.get("missed_count_threshold"));
   const no_callback_minutes = numOrNull(formData.get("no_callback_minutes"));
-  const condition_operator = String(formData.get("condition_operator") ?? "OR");
-  if (condition_operator !== "AND" && condition_operator !== "OR") {
-    throw new Error("invalid condition_operator");
-  }
+  const condition_operator_raw = String(formData.get("condition_operator") ?? "OR").trim();
+  const condition_operator = condition_operator_raw === "AND" || condition_operator_raw === "OR" ? condition_operator_raw : "OR";
   const message_template = String(formData.get("message_template") ?? "");
   if (!message_template.trim()) throw new Error("message_template required");
 

@@ -166,7 +166,7 @@ async function fetchAlertNotificationRules(): Promise<AlertNotificationRuleRow[]
         supabase
           .from("alert_notification_rules")
           .select(
-            "id, name, enabled, sort_order, missed_count_threshold, no_callback_minutes, condition_operator, recipients, message_template"
+            "id, name, enabled, sort_order, missed_count_threshold, no_callback_minutes, condition_operator, recipients, message_template, updated_at"
           )
           .order("sort_order", { ascending: true })
           .range(from, to)

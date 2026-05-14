@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { renderMessageTemplate } from "@/src/lib/bitrixbot/render-message-template";
 import type { AlertNotificationRuleRow } from "@/src/lib/bitrixbot/alert-notification-rule-engine";
 import {
@@ -61,6 +61,11 @@ function recipientsHuman(recipients: unknown): string {
 }
 
 function RuleEditor({ rule }: { rule: AlertNotificationRuleRow }) {
+  const [conditionOperator, setConditionOperator] = useState(rule.condition_operator);
+  useEffect(() => {
+    setConditionOperator(rule.condition_operator);
+  }, [rule.id, rule.condition_operator, rule.updated_at]);
+
   const [manualIds, setManualIds] = useState<string[]>(() => {
     const arr = Array.isArray(rule.recipients) ? rule.recipients : [];
     const ids: string[] = [];
@@ -95,7 +100,7 @@ function RuleEditor({ rule }: { rule: AlertNotificationRuleRow }) {
   );
 
   return (
-    <section className="rounded-xl border border-white/10 bg-white/5 p-4">
+    <section key={`${rule.id}:${rule.updated_at ?? ""}`} className="rounded-xl border border-white/10 bg-white/5 p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-white/90">{rule.name}</h3>
         <div className="flex flex-wrap gap-2">
@@ -195,7 +200,8 @@ function RuleEditor({ rule }: { rule: AlertNotificationRuleRow }) {
           Логика между условиями
           <select
             name="condition_operator"
-            defaultValue={rule.condition_operator}
+            value={conditionOperator}
+            onChange={(e) => setConditionOperator(e.target.value === "AND" ? "AND" : "OR")}
             className="mt-1 rounded-md border border-white/10 bg-black/25 px-2 py-1.5 text-sm text-white"
           >
             <option value="AND">AND</option>
@@ -299,9 +305,14 @@ export function NotificationRulesPanel(props: { rules: AlertNotificationRuleRow[
   return (
     <div className="flex flex-col gap-4">
       <p className="text-sm text-white/70">
-        Правила из таблицы <code className="text-white/80">alert_notification_rules</code>. Порядок —{" "}
-        <code className="text-white/80">sort_order</code> (меньше = раньше). Дедуп доставок:{" "}
-        <code className="text-white/80">case_id + alert_rule_id + recipient_bitrix_user_id</code>.
+        Правила из таблицы <code className="text-white/80">alert_notification_rules</code> (конструктор missed-call
+        alerting). Устаревшие <code className="text-white/80">notification_rules</code> /{" "}
+        <code className="text-white/80">process-no-callback-escalations</code> — отдельная цепочка. Порядок —{" "}
+        <code className="text-white/80">sort_order</code> (меньше = раньше). Поле{" "}
+        <code className="text-white/80">condition_operator</code> задаёт AND/OR между порогом пропущенных и минутами без
+        успешного перезвона. Дедуп доставок:{" "}
+        <code className="text-white/80">case_id + alert_rule_id + recipient_bitrix_user_id</code>. Успешный callback
+        помечает кейс <code className="text-white/80">resolved</code> (см. resolve-missed-call-case-by-callback).
       </p>
       <form action={saveAlertNotificationRuleAction} className="flex flex-wrap items-end gap-2 rounded-lg border border-dashed border-white/15 p-3">
         <input type="hidden" name="create" value="1" />
@@ -320,7 +331,7 @@ export function NotificationRulesPanel(props: { rules: AlertNotificationRuleRow[
       </form>
       <div className="flex flex-col gap-4">
         {sorted.map((r) => (
-          <RuleEditor key={r.id} rule={r} />
+          <RuleEditor key={`${r.id}:${r.updated_at ?? ""}`} rule={r} />
         ))}
       </div>
     </div>

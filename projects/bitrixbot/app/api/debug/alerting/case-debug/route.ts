@@ -4,6 +4,7 @@ import { createServiceRoleClient } from "@/lib/supabase/server";
 import { loadCallEventsForCase } from "@/src/lib/bitrixbot/case-call-events";
 import { redactSecretsForDebug } from "@/src/lib/bitrixbot/redact-webhook-payload";
 import { normalizeStoredDealUrl } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
+import { explainMissedCallAlertRulesForCase } from "@/src/lib/bitrixbot/prepare-notifications-for-missed-call-case";
 import { voximplantPayloadSummary } from "@/src/lib/bitrixbot/voximplant-inbound-missed";
 
 function isAuthorized(req: Request): boolean {
@@ -22,6 +23,7 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const caseId = (url.searchParams.get("caseId") ?? "").trim();
+  const explainRules = (url.searchParams.get("explainRules") ?? "").trim() === "1";
   if (!caseId) {
     return NextResponse.json({ ok: false, error: "caseId required" }, { status: 400 });
   }
@@ -101,6 +103,12 @@ export async function GET(req: Request) {
     created_at: string;
   }[];
 
+  const alertRuleExplanation = explainRules
+    ? await explainMissedCallAlertRulesForCase(caseId).catch((e: unknown) => ({
+        explainError: e instanceof Error ? e.message : String(e)
+      }))
+    : undefined;
+
   return NextResponse.json({
     ok: true,
     case: {
@@ -125,6 +133,7 @@ export async function GET(req: Request) {
         message: msg,
         delivery_status: d.delivery_status
       };
-    })
+    }),
+    ...(alertRuleExplanation !== undefined ? { alertRuleExplanation } : {})
   });
 }

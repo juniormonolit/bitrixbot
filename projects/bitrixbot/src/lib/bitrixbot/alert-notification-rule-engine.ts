@@ -18,6 +18,8 @@ export type AlertNotificationRuleRow = {
   condition_operator: "AND" | "OR";
   recipients: unknown;
   message_template: string;
+  /** Present when loaded from Postgres (UI remount key after save). */
+  updated_at?: string;
 };
 
 export type AlertRuleEvaluationContext = {
@@ -58,15 +60,12 @@ export function parseAlertRecipientSpecs(recipients: unknown): AlertRecipientSpe
   return out;
 }
 
-function missedPart(
-  threshold: number | null,
-  missedCount: number
-): boolean | null {
+function missedThresholdMet(threshold: number | null, missedCount: number): boolean | null {
   if (threshold === null) return null;
   return missedCount >= threshold;
 }
 
-function minutesPart(
+function timeWithoutSuccessfulCallbackMet(
   noCallbackMinutes: number | null,
   ctx: AlertRuleEvaluationContext
 ): boolean | null {
@@ -76,10 +75,67 @@ function minutesPart(
   return ctx.minutesSinceLastMissed >= noCallbackMinutes;
 }
 
+/** Per-condition breakdown for alerting rules (threshold + no-callback grace). */
+export type AlertRuleConditionEvaluation = {
+  logic: "AND" | "OR";
+  /** `null` = condition not configured on the rule */
+  missedCountConditionMet: boolean | null;
+  /** Minutes without successful outbound/callback since last missed; `null` if not configured */
+  timeWithoutCallbackConditionMet: boolean | null;
+  finalMatched: boolean;
+};
+
 /**
- * Rule matches if configured parts are satisfied, combined with AND/OR.
- * If only one side is configured, operator is ignored.
+ * Evaluates rule conditions. AND/OR applies only when both sides are configured;
+ * a single configured side ignores the operator.
  */
+export function evaluateAlertRuleConditionDetailed(
+  rule: Pick<
+    AlertNotificationRuleRow,
+    "missed_count_threshold" | "no_callback_minutes" | "condition_operator"
+  >,
+  ctx: AlertRuleEvaluationContext
+): AlertRuleConditionEvaluation {
+  const missed = missedThresholdMet(rule.missed_count_threshold, ctx.missedCount);
+  const timeOk = timeWithoutSuccessfulCallbackMet(rule.no_callback_minutes, ctx);
+
+  if (missed === null && timeOk === null) {
+    return {
+      logic: rule.condition_operator,
+      missedCountConditionMet: null,
+      timeWithoutCallbackConditionMet: null,
+      finalMatched: false
+    };
+  }
+  if (missed === null && timeOk !== null) {
+    return {
+      logic: rule.condition_operator,
+      missedCountConditionMet: null,
+      timeWithoutCallbackConditionMet: timeOk,
+      finalMatched: timeOk
+    };
+  }
+  if (timeOk === null && missed !== null) {
+    return {
+      logic: rule.condition_operator,
+      missedCountConditionMet: missed,
+      timeWithoutCallbackConditionMet: null,
+      finalMatched: missed
+    };
+  }
+
+  const both = { missed: missed as boolean, timeOk: timeOk as boolean };
+  const finalMatched =
+    rule.condition_operator === "AND" ? both.missed && both.timeOk : both.missed || both.timeOk;
+
+  return {
+    logic: rule.condition_operator,
+    missedCountConditionMet: both.missed,
+    timeWithoutCallbackConditionMet: both.timeOk,
+    finalMatched
+  };
+}
+
 export function evaluateAlertRuleCondition(
   rule: Pick<
     AlertNotificationRuleRow,
@@ -87,17 +143,7 @@ export function evaluateAlertRuleCondition(
   >,
   ctx: AlertRuleEvaluationContext
 ): boolean {
-  const a = missedPart(rule.missed_count_threshold, ctx.missedCount);
-  const b = minutesPart(rule.no_callback_minutes, ctx);
-
-  if (a === null && b === null) return false;
-  if (a === null && b !== null) return b;
-  if (b === null && a !== null) return a;
-
-  if (rule.condition_operator === "AND") {
-    return Boolean(a && b);
-  }
-  return Boolean(a || b);
+  return evaluateAlertRuleConditionDetailed(rule, ctx).finalMatched;
 }
 
 type HierarchyForResolve = {

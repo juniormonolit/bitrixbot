@@ -3,7 +3,7 @@ import { withTimeout } from "@/src/lib/bitrixbot/async-timeout";
 import {
   AlertNotificationRuleRow,
   defaultMessageLineForRecipientRole,
-  evaluateAlertRuleCondition,
+  evaluateAlertRuleConditionDetailed,
   parseAlertRecipientSpecs,
   resolveAlertRecipients,
   type AlertRuleEvaluationContext
@@ -37,10 +37,26 @@ export type PrepareNotificationsDiag = { lastStage: string };
 
 export type PrepareNotificationsOptions = {
   treatManagerAsEmployeeFallback?: boolean;
+  /** When true, result includes `ruleEvaluationDebug` (per-rule predicates and delivery stats). */
+  includeRuleEvaluationDebug?: boolean;
+};
+
+/** One row per configured alert_notification_rule — for diagnosing matches without reading logs. */
+export type PrepareRuleEvaluationSnapshot = {
+  ruleId: string;
+  ruleName: string;
+  logic: "AND" | "OR";
+  missedCountConditionMet: boolean | null;
+  timeWithoutCallbackConditionMet: boolean | null;
+  finalMatched: boolean;
+  recipientsResolved: number;
+  deliveryCreated: number;
+  skippedExistingDeliveries: number;
 };
 
 type MissedCallCaseRow = {
   id: string;
+  status: string;
   phone_normalized: string;
   deal_id: number | null;
   deal_url: string | null;
@@ -73,11 +89,12 @@ export type PrepareNotificationsResult = {
   /** Last alert rule id that matched conditions in this run (by sort_order). */
   selectedRuleId: string | null;
   createdDeliveriesCount: number;
-  /** Rows skipped due to unique index `notification_deliveries_alert_rule_recipient_dedupe_idx`. */
-  skippedDuplicateDeliveries: number;
+  /** Existing pending/sent row or dedupe unique hit for case+rule+recipient (not an error). */
+  skippedExistingDeliveries: number;
   skippedRecipients: { role: string; reason: string }[];
   warnings: string[];
   managerRecipientFallbackUsed: boolean;
+  ruleEvaluationDebug?: PrepareRuleEvaluationSnapshot[];
 };
 
 function mark(diag: PrepareNotificationsDiag | null | undefined, stage: string, meta?: Record<string, unknown>) {
@@ -164,8 +181,10 @@ export async function prepareNotificationsForMissedCallCase(
   const warnings: string[] = [];
   const skippedRecipients: { role: string; reason: string }[] = [];
   let managerRecipientFallbackUsed = false;
-  let skippedDuplicateDeliveries = 0;
+  let skippedExistingDeliveries = 0;
   const treatFb = Boolean(options?.treatManagerAsEmployeeFallback);
+  const wantRuleDebug = Boolean(options?.includeRuleEvaluationDebug);
+  const ruleEvaluationDebug: PrepareRuleEvaluationSnapshot[] | undefined = wantRuleDebug ? [] : undefined;
 
   mark(diag, "prepare_notifications_start", { caseId });
   mark(diag, "prepare_notifications_lookup_case_start", { caseId });
@@ -173,7 +192,7 @@ export async function prepareNotificationsForMissedCallCase(
     supabase
       .from("missed_call_cases")
       .select(
-        "id, phone_normalized, deal_id, deal_url, deal_title, contact_name, manager_bitrix_user_id, manager_name, department_id, missed_count, last_missed_at, last_outbound_at, last_successful_callback_at, context"
+        "id, status, phone_normalized, deal_id, deal_url, deal_title, contact_name, manager_bitrix_user_id, manager_name, department_id, missed_count, last_missed_at, last_outbound_at, last_successful_callback_at, context"
       )
       .eq("id", caseId)
       .maybeSingle(),
@@ -187,14 +206,31 @@ export async function prepareNotificationsForMissedCallCase(
       caseId,
       selectedRuleId: null,
       createdDeliveriesCount: 0,
-      skippedDuplicateDeliveries: 0,
+      skippedExistingDeliveries: 0,
       skippedRecipients: [],
       warnings: ["case_not_found"],
-      managerRecipientFallbackUsed: false
+      managerRecipientFallbackUsed: false,
+      ...(wantRuleDebug ? { ruleEvaluationDebug: [] } : {})
     };
   }
 
   const typedCase = caseRow as MissedCallCaseRow;
+
+  const caseStatus = String(typedCase.status ?? "").trim();
+  if (caseStatus !== "open") {
+    warnings.push("prepare_skipped_case_not_open");
+    console.log(`${LOG} skipped_case_not_open`, { caseId: typedCase.id, status: typedCase.status });
+    return {
+      caseId: typedCase.id,
+      selectedRuleId: null,
+      createdDeliveriesCount: 0,
+      skippedExistingDeliveries: 0,
+      skippedRecipients: [],
+      warnings,
+      managerRecipientFallbackUsed: false,
+      ...(wantRuleDebug ? { ruleEvaluationDebug: [] } : {})
+    };
+  }
 
   const caseManagerId = normalizeBitrixUserId(typedCase.manager_bitrix_user_id);
   if (!caseManagerId) {
@@ -204,10 +240,11 @@ export async function prepareNotificationsForMissedCallCase(
       caseId: typedCase.id,
       selectedRuleId: null,
       createdDeliveriesCount: 0,
-      skippedDuplicateDeliveries: 0,
+      skippedExistingDeliveries: 0,
       skippedRecipients: [],
       warnings,
-      managerRecipientFallbackUsed: false
+      managerRecipientFallbackUsed: false,
+      ...(wantRuleDebug ? { ruleEvaluationDebug: [] } : {})
     };
   }
 
@@ -226,10 +263,26 @@ export async function prepareNotificationsForMissedCallCase(
       caseId: typedCase.id,
       selectedRuleId: null,
       createdDeliveriesCount: 0,
-      skippedDuplicateDeliveries: 0,
+      skippedExistingDeliveries: 0,
       skippedRecipients,
       warnings,
-      managerRecipientFallbackUsed: false
+      managerRecipientFallbackUsed: false,
+      ...(wantRuleDebug ? { ruleEvaluationDebug: [] } : {})
+    };
+  }
+
+  if (hasCallbackAfterMissed(typedCase)) {
+    warnings.push("prepare_skipped_followup_after_last_missed");
+    console.log(`${LOG} skipped_after_callback`, { caseId: typedCase.id });
+    return {
+      caseId: typedCase.id,
+      selectedRuleId: null,
+      createdDeliveriesCount: 0,
+      skippedExistingDeliveries: 0,
+      skippedRecipients,
+      warnings,
+      managerRecipientFallbackUsed: false,
+      ...(wantRuleDebug ? { ruleEvaluationDebug: [] } : {})
     };
   }
 
@@ -263,10 +316,11 @@ export async function prepareNotificationsForMissedCallCase(
       caseId: typedCase.id,
       selectedRuleId: null,
       createdDeliveriesCount: 0,
-      skippedDuplicateDeliveries: 0,
+      skippedExistingDeliveries: 0,
       skippedRecipients,
       warnings,
-      managerRecipientFallbackUsed: false
+      managerRecipientFallbackUsed: false,
+      ...(wantRuleDebug ? { ruleEvaluationDebug: [] } : {})
     };
   }
 
@@ -274,7 +328,8 @@ export async function prepareNotificationsForMissedCallCase(
   const ctx: AlertRuleEvaluationContext = {
     missedCount: typedCase.missed_count,
     minutesSinceLastMissed: minutesBetween(now, typedCase.last_missed_at),
-    hasCallbackAfterMissed: hasCallbackAfterMissed(typedCase)
+    /** False here: callers that reach this branch already gated on outbound/callback timestamps. */
+    hasCallbackAfterMissed: false
   };
 
   mark(diag, "prepare_notifications_resolve_recipients_start", { missedCount: typedCase.missed_count });
@@ -288,7 +343,28 @@ export async function prepareNotificationsForMissedCallCase(
   mark(diag, "prepare_notifications_insert_deliveries_start", { caseId });
 
   for (const rule of rules) {
-    if (!evaluateAlertRuleCondition(rule, ctx)) continue;
+    const evalDet = evaluateAlertRuleConditionDetailed(rule, ctx);
+
+    let deliveryCreatedForRule = 0;
+    let skippedExistingForRule = 0;
+
+    if (!evalDet.finalMatched) {
+      if (ruleEvaluationDebug) {
+        ruleEvaluationDebug.push({
+          ruleId: rule.id,
+          ruleName: rule.name,
+          logic: evalDet.logic,
+          missedCountConditionMet: evalDet.missedCountConditionMet,
+          timeWithoutCallbackConditionMet: evalDet.timeWithoutCallbackConditionMet,
+          finalMatched: false,
+          recipientsResolved: 0,
+          deliveryCreated: 0,
+          skippedExistingDeliveries: 0
+        });
+      }
+      continue;
+    }
+
     lastMatchedRuleId = rule.id;
 
     const specs = parseAlertRecipientSpecs(rule.recipients);
@@ -303,6 +379,8 @@ export async function prepareNotificationsForMissedCallCase(
       (msg) => warnings.push(`${msg}:rule=${rule.id}:${rule.name}`)
     );
 
+    const recipientsResolved = recipients.length;
+
     for (const r of recipients) {
       if (!r.bitrix_user_id) {
         skippedRecipients.push({ role: r.recipient_role, reason: "recipient_user_missing" });
@@ -316,7 +394,9 @@ export async function prepareNotificationsForMissedCallCase(
       });
 
       if (isDup) {
-        skippedRecipients.push({ role: r.recipient_role, reason: "duplicate_delivery" });
+        skippedExistingDeliveries++;
+        skippedExistingForRule++;
+        skippedRecipients.push({ role: r.recipient_role, reason: "skipped_existing_delivery" });
         continue;
       }
 
@@ -326,9 +406,7 @@ export async function prepareNotificationsForMissedCallCase(
           : typedCase.manager_name;
 
       const minutesWithout =
-        ctx.hasCallbackAfterMissed || ctx.minutesSinceLastMissed === null
-          ? "0"
-          : String(ctx.minutesSinceLastMissed);
+        ctx.minutesSinceLastMissed === null ? "0" : String(ctx.minutesSinceLastMissed);
 
       const messageText = renderMessageTemplate(rule.message_template, {
         message: defaultMessageLineForRecipientRole(r.recipient_role),
@@ -369,8 +447,9 @@ export async function prepareNotificationsForMissedCallCase(
       );
       if (insErr) {
         if (isAlertRuleRecipientDedupeViolation(insErr)) {
-          skippedDuplicateDeliveries++;
-          skippedRecipients.push({ role: r.recipient_role, reason: "skipped_duplicate_delivery" });
+          skippedExistingDeliveries++;
+          skippedExistingForRule++;
+          skippedRecipients.push({ role: r.recipient_role, reason: "skipped_existing_delivery" });
           console.log(`${LOG} skip_dedupe_delivery`, {
             caseId: typedCase.id,
             ruleId: rule.id,
@@ -381,10 +460,25 @@ export async function prepareNotificationsForMissedCallCase(
         throw new Error(insErr.message);
       }
 
+      deliveryCreatedForRule++;
       created++;
       if (r.recipient_source === "call_event_manager_bitrix_user_id_fallback") {
         managerRecipientFallbackUsed = true;
       }
+    }
+
+    if (ruleEvaluationDebug) {
+      ruleEvaluationDebug.push({
+        ruleId: rule.id,
+        ruleName: rule.name,
+        logic: evalDet.logic,
+        missedCountConditionMet: evalDet.missedCountConditionMet,
+        timeWithoutCallbackConditionMet: evalDet.timeWithoutCallbackConditionMet,
+        finalMatched: true,
+        recipientsResolved,
+        deliveryCreated: deliveryCreatedForRule,
+        skippedExistingDeliveries: skippedExistingForRule
+      });
     }
   }
 
@@ -413,9 +507,172 @@ export async function prepareNotificationsForMissedCallCase(
     caseId: typedCase.id,
     selectedRuleId: lastMatchedRuleId,
     createdDeliveriesCount: created,
-    skippedDuplicateDeliveries,
+    skippedExistingDeliveries,
     skippedRecipients,
     warnings,
-    managerRecipientFallbackUsed
+    managerRecipientFallbackUsed,
+    ...(ruleEvaluationDebug ? { ruleEvaluationDebug } : {})
   };
+}
+
+export type ExplainMissedCallAlertRulesResult = {
+  caseId: string;
+  skipped: boolean;
+  skipReason?: string;
+  evaluations: PrepareRuleEvaluationSnapshot[];
+  warnings: string[];
+};
+
+/**
+ * Dry-run: same predicates and recipient resolution as prepare, **no inserts**. For case-debug UX.
+ */
+export async function explainMissedCallAlertRulesForCase(
+  caseId: string,
+  treatFallback?: boolean
+): Promise<ExplainMissedCallAlertRulesResult> {
+  const supabase = createServiceRoleClient();
+  const warnings: string[] = [];
+  const evaluations: PrepareRuleEvaluationSnapshot[] = [];
+
+  const { data: caseRow, error: caseErr } = await withTimeout(
+    supabase
+      .from("missed_call_cases")
+      .select(
+        "id, status, phone_normalized, deal_id, deal_url, deal_title, contact_name, manager_bitrix_user_id, manager_name, department_id, missed_count, last_missed_at, last_outbound_at, last_successful_callback_at, context"
+      )
+      .eq("id", caseId)
+      .maybeSingle(),
+    DB_OP_MS,
+    "explain_missed_case.select"
+  );
+  if (caseErr) throw new Error(caseErr.message);
+  if (!caseRow) {
+    return {
+      caseId,
+      skipped: true,
+      skipReason: "case_not_found",
+      evaluations,
+      warnings: ["case_not_found"]
+    };
+  }
+
+  const typedCase = caseRow as MissedCallCaseRow;
+
+  const caseStatus = String(typedCase.status ?? "").trim();
+  if (caseStatus !== "open") {
+    return {
+      caseId: typedCase.id,
+      skipped: true,
+      skipReason: "case_not_open",
+      evaluations,
+      warnings: [...warnings, "prepare_skipped_case_not_open"]
+    };
+  }
+
+  const caseManagerId = normalizeBitrixUserId(typedCase.manager_bitrix_user_id);
+  if (!caseManagerId) {
+    return {
+      caseId: typedCase.id,
+      skipped: true,
+      skipReason: "missing_case_manager",
+      evaluations,
+      warnings: [...warnings, "prepare_skipped_missing_case_manager"]
+    };
+  }
+
+  const outboundPrepareBlock = await outboundActivityBlocksMissedPrepare(supabase, {
+    phone_normalized: typedCase.phone_normalized,
+    context: typedCase.context
+  });
+  if (outboundPrepareBlock) {
+    return {
+      caseId: typedCase.id,
+      skipped: true,
+      skipReason: `outbound_blocked:${outboundPrepareBlock}`,
+      evaluations,
+      warnings: [...warnings, `prepare_blocked_${outboundPrepareBlock}`]
+    };
+  }
+
+  if (hasCallbackAfterMissed(typedCase)) {
+    return {
+      caseId: typedCase.id,
+      skipped: true,
+      skipReason: "followup_after_last_missed",
+      evaluations,
+      warnings: [...warnings, "prepare_skipped_followup_after_last_missed"]
+    };
+  }
+
+  const mid = caseManagerId;
+  const treatFb = Boolean(treatFallback);
+  const { data: hierarchy, error: hierErr } = await withTimeout(
+    supabase
+      .from("org_resolved_hierarchy")
+      .select(
+        "manager_bitrix_user_id, rop_bitrix_user_id, rop_name, department_director_bitrix_user_id, department_director_name, company_director_bitrix_user_id, company_director_name"
+      )
+      .eq("manager_bitrix_user_id", mid)
+      .maybeSingle(),
+    DB_OP_MS,
+    "explain_org_hierarchy.select"
+  );
+  if (hierErr) throw new Error(hierErr.message);
+  const typedHierarchy = (hierarchy as ResolvedHierarchyRow | null) ?? null;
+
+  const rules = await loadAlertNotificationRules(supabase);
+
+  const now = new Date();
+  const ctx: AlertRuleEvaluationContext = {
+    missedCount: typedCase.missed_count,
+    minutesSinceLastMissed: minutesBetween(now, typedCase.last_missed_at),
+    hasCallbackAfterMissed: false
+  };
+
+  const managerUid = mid;
+
+  for (const rule of rules) {
+    const evalDet = evaluateAlertRuleConditionDetailed(rule, ctx);
+
+    if (!evalDet.finalMatched) {
+      evaluations.push({
+        ruleId: rule.id,
+        ruleName: rule.name,
+        logic: evalDet.logic,
+        missedCountConditionMet: evalDet.missedCountConditionMet,
+        timeWithoutCallbackConditionMet: evalDet.timeWithoutCallbackConditionMet,
+        finalMatched: false,
+        recipientsResolved: 0,
+        deliveryCreated: 0,
+        skippedExistingDeliveries: 0
+      });
+      continue;
+    }
+
+    const specs = parseAlertRecipientSpecs(rule.recipients);
+    const recipients = resolveAlertRecipients(
+      specs,
+      {
+        managerBitrixUserId: managerUid,
+        managerName: typedCase.manager_name,
+        treatManagerFallback: treatFb,
+        hierarchy: typedHierarchy
+      },
+      (msg) => warnings.push(`${msg}:rule=${rule.id}:${rule.name}`)
+    );
+
+    evaluations.push({
+      ruleId: rule.id,
+      ruleName: rule.name,
+      logic: evalDet.logic,
+      missedCountConditionMet: evalDet.missedCountConditionMet,
+      timeWithoutCallbackConditionMet: evalDet.timeWithoutCallbackConditionMet,
+      finalMatched: true,
+      recipientsResolved: recipients.length,
+      deliveryCreated: 0,
+      skippedExistingDeliveries: 0
+    });
+  }
+
+  return { caseId: typedCase.id, skipped: false, evaluations, warnings };
 }

@@ -1,7 +1,10 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
 import { withTimeout } from "@/src/lib/bitrixbot/async-timeout";
-import { prepareNotificationsForMissedCallCase } from "@/src/lib/bitrixbot/prepare-notifications-for-missed-call-case";
+import {
+  prepareNotificationsForMissedCallCase,
+  type PrepareRuleEvaluationSnapshot
+} from "@/src/lib/bitrixbot/prepare-notifications-for-missed-call-case";
 import {
   upsertMissedCallCaseFromEvent,
   type DealEnrichmentCallSnapshot,
@@ -165,8 +168,12 @@ export type ProcessNewMissedCallEventsSummary = {
   createdCases: number;
   updatedCases: number;
   createdDeliveries: number;
-  /** Доставки не созданы из-за коллизии с dedupe по alert_rule/recipient (ожидаемо при гонках). */
-  skippedDuplicateDeliveries: number;
+  /** Уже есть pending/sent по case+rule+recipient или уникальный индекс dedupe (не ошибка). */
+  skippedExistingDeliveries: number;
+  /**
+   * Если `ALERT_PREP_RULE_DEBUG=1|true|yes`, последний кейс с полным снимком по правилам (перезаписывается в цикле).
+   */
+  prepareRuleEvaluationDebugLast?: { caseId: string; snapshots: PrepareRuleEvaluationSnapshot[] };
   warnings: string[];
   /** Сгруппировано по manager Bitrix id (без дублей в сотнях строк). */
   employeeNotFound: EmployeeNotFoundAgg[];
@@ -215,6 +222,11 @@ const emptyDealEnrichment = (): DealEnrichmentSummary => ({
   byPhone: 0,
   errors: 0
 });
+
+function alertPrepRuleDebugEnabled(): boolean {
+  const v = process.env.ALERT_PREP_RULE_DEBUG?.trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
 
 function parseUpsertTimeoutMs(): number | null {
   const raw = process.env.MISSED_CALL_UPSERT_TIMEOUT_MS;
@@ -277,7 +289,7 @@ export async function processNewMissedCallEvents(
       createdCases: 0,
       updatedCases: 0,
       createdDeliveries: 0,
-      skippedDuplicateDeliveries: 0,
+      skippedExistingDeliveries: 0,
       warnings,
       employeeNotFound: [],
       upsertFailures: [],
@@ -349,12 +361,15 @@ export async function processNewMissedCallEvents(
   let createdCases = 0;
   let updatedCases = 0;
   let createdDeliveries = 0;
-  let skippedDuplicateDeliveries = 0;
+  let skippedExistingDeliveries = 0;
   const skippedReasons: Record<string, number> = {};
   const dealEnrichment = emptyDealEnrichment();
   let recoverableUpsertErrors = 0;
 
   const upsertTimeoutMs = parseUpsertTimeoutMs();
+  const prepareRuleDbg = alertPrepRuleDebugEnabled();
+
+  let prepareRuleEvaluationDebugLast: ProcessNewMissedCallEventsSummary["prepareRuleEvaluationDebugLast"];
 
   for (const ev of toProcess) {
     console.log(`${LOG} before upsert`, {
@@ -419,14 +434,21 @@ export async function processNewMissedCallEvents(
         try {
           const prep = await withTimeout(
             prepareNotificationsForMissedCallCase(res.caseId, prepDiag, {
-              treatManagerAsEmployeeFallback: Boolean(res.employeeNotFoundHit)
+              treatManagerAsEmployeeFallback: Boolean(res.employeeNotFoundHit),
+              includeRuleEvaluationDebug: prepareRuleDbg
             }),
             PREPARE_NOTIFICATIONS_TIMEOUT_MS,
             `prepare_notifications:${ev.id}`
           );
           createdDeliveries += prep.createdDeliveriesCount;
-          skippedDuplicateDeliveries += prep.skippedDuplicateDeliveries;
+          skippedExistingDeliveries += prep.skippedExistingDeliveries;
           warnings.push(...prep.warnings);
+          if (prepareRuleDbg && prep.ruleEvaluationDebug) {
+            prepareRuleEvaluationDebugLast = {
+              caseId: prep.caseId,
+              snapshots: prep.ruleEvaluationDebug
+            };
+          }
           deliveryFallbackUsed = prep.managerRecipientFallbackUsed;
         } catch (prepErr) {
           const pmsg = prepErr instanceof Error ? prepErr.message : String(prepErr);
@@ -476,7 +498,8 @@ export async function processNewMissedCallEvents(
     createdCases,
     updatedCases,
     createdDeliveries,
-    skippedDuplicateDeliveries,
+    skippedExistingDeliveries,
+    ...(prepareRuleEvaluationDebugLast ? { prepareRuleEvaluationDebugLast } : {}),
     warnings,
     employeeNotFound,
     upsertFailures,
