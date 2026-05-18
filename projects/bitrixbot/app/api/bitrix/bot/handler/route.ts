@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { routeBitrixWebhook } from "@/lib/bitrix/webhook-router";
 import { supabaseServiceRoleForRoute } from "@/lib/supabase/route";
 import { normalizeBitrixCallEvent } from "@/lib/bitrix/call-normalize";
-import { normalizeBitrixDealEvent } from "@/lib/bitrix/deal-normalize";
 
 type JsonObject = Record<string, unknown>;
 
@@ -68,15 +67,6 @@ function summarizeWebhookForLog(
       call_id: pickStr(d.CALL_ID) ?? pickStr(d.CALL_APP_ID) ?? pickStr(d.ID),
       crm_activity_id: pickStr(d.CRM_ACTIVITY_ID),
       portal_user_id: pickStr(d.PORTAL_USER_ID) ?? pickStr(d.USER_ID)
-    };
-  }
-
-  if (event === "ONCRMDEALADD" || event === "ONCRMDEALUPDATE") {
-    const fields = d.FIELDS;
-    const fObj = fields && typeof fields === "object" && !Array.isArray(fields) ? (fields as JsonObject) : {};
-    return {
-      ...base,
-      deal_id: pickStr(fObj.ID) ?? pickStr(d.ID)
     };
   }
 
@@ -290,6 +280,12 @@ export async function POST(req: Request) {
             .from("bitrix_webhook_events")
             .update({ processing_status: "ignored" })
             .eq("id", webhookEventId ?? "");
+          console.log("[CALL WEBHOOK]", {
+            received: true,
+            saved: false,
+            webhook_event: event ?? "",
+            reason: "normalize_returned_null"
+          });
           return NextResponse.json({ ok: true, duplicate: false });
         }
 
@@ -313,18 +309,18 @@ export async function POST(req: Request) {
 
         if (callErr) throw new Error(callErr.message);
 
-        console.log("[bitrix-call-ingest]", {
+        console.log("[CALL WEBHOOK]", {
+          received: true,
           saved: true,
-          webhookEvent: event ?? "",
-          status: normalized.status,
-          callType: normalized.call_type_raw,
+          call_id: normalized.bitrix_call_id,
           direction: normalized.call_direction,
+          failed_code: normalized.failed_code,
+          status: normalized.status,
           duration: normalized.call_duration_seconds,
-          failedCode: normalized.failed_code,
-          phone: normalized.phone_normalized,
-          manager: normalized.manager_bitrix_user_id,
-          activity: normalized.crm_activity_id,
-          bitrixCallId: normalized.bitrix_call_id
+          phone_normalized: normalized.phone_normalized,
+          manager_bitrix_user_id: normalized.manager_bitrix_user_id,
+          webhook_event: event ?? "",
+          reason: "call_event_inserted"
         });
 
         await supabase
@@ -334,46 +330,6 @@ export async function POST(req: Request) {
 
         console.log("[bitrix-bot-handler] call_event inserted", {
           status: normalized.status,
-          durationMs: Date.now() - receivedAt
-        });
-
-        return NextResponse.json({ ok: true, duplicate: false });
-      }
-
-      if (event === "ONCRMDEALADD" || event === "ONCRMDEALUPDATE") {
-        const normalized = normalizeBitrixDealEvent(event, payload);
-        if (!normalized) {
-          await supabase
-            .from("bitrix_webhook_events")
-            .update({ processing_status: "ignored" })
-            .eq("id", webhookEventId ?? "");
-          return NextResponse.json({ ok: true, duplicate: false });
-        }
-
-        const { error: dealErr } = await supabase.from("deal_events").insert({
-          event_name: normalized.event_name,
-          bitrix_deal_id: normalized.bitrix_deal_id,
-          stage_id: normalized.stage_id,
-          category_id: normalized.category_id,
-          assigned_by_id: normalized.assigned_by_id,
-          created_by_id: normalized.created_by_id,
-          title: normalized.title,
-          opportunity: normalized.opportunity,
-          currency: normalized.currency,
-          is_new: normalized.is_new,
-          occurred_at: normalized.occurred_at,
-          raw_payload: normalized.raw_payload
-        });
-        if (dealErr) throw new Error(dealErr.message);
-
-        await supabase
-          .from("bitrix_webhook_events")
-          .update({ processing_status: "processed" })
-          .eq("id", webhookEventId ?? "");
-
-        console.log("[bitrix-bot-handler] deal_event inserted", {
-          event,
-          bitrixDealId: normalized.bitrix_deal_id,
           durationMs: Date.now() - receivedAt
         });
 

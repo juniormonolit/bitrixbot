@@ -87,3 +87,26 @@ export function normalizeBitrixDealEvent(
   };
 }
 
+export type NormalizedDealDeleteEvent = {
+  event_name: "ONCRMDEALDELETE";
+  bitrix_deal_id: string;
+  occurred_at: string;
+  raw_payload: unknown;
+};
+
+export function normalizeBitrixDealDeleteEvent(eventName: string, payload: unknown): NormalizedDealDeleteEvent | null {
+  if (eventName !== "ONCRMDEALDELETE") return null;
+  const root = getObj(payload);
+  const data = getObj(root.data ?? root.DATA);
+  const fields = getObj(data.FIELDS ?? data.fields);
+  const dealId =
+    getString(fields.ID ?? fields.id) ?? getString(data.ID) ?? pickDealId(root);
+  if (!dealId) return null;
+  return {
+    event_name: "ONCRMDEALDELETE",
+    bitrix_deal_id: dealId,
+    occurred_at: new Date().toISOString(),
+    raw_payload: payload
+  };
+}
+

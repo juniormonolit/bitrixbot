@@ -9,8 +9,8 @@ import {
   type AlertRuleEvaluationContext
 } from "@/src/lib/bitrixbot/alert-notification-rule-engine";
 import { formatPhoneForDisplay } from "@/lib/bitrix/phone-normalize";
-import { dealUrlForMessageTemplate } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
 import { normalizeBitrixUserId, isValidAlertRecipientBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
+import { dealUrlForMessageTemplate } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
 import { renderMessageTemplate } from "@/src/lib/bitrixbot/render-message-template";
 import { outboundActivityBlocksMissedPrepare } from "@/src/lib/bitrixbot/alerting-prepare-outbound-guard";
 
@@ -58,9 +58,6 @@ type MissedCallCaseRow = {
   id: string;
   status: string;
   phone_normalized: string;
-  deal_id: number | null;
-  deal_url: string | null;
-  deal_title: string | null;
   contact_name: string | null;
   manager_bitrix_user_id: string | null;
   manager_name: string | null;
@@ -69,6 +66,9 @@ type MissedCallCaseRow = {
   last_missed_at: string;
   last_outbound_at: string | null;
   last_successful_callback_at: string | null;
+  deal_id: number | null;
+  deal_url: string | null;
+  deal_title: string | null;
   context: unknown;
 };
 
@@ -197,7 +197,7 @@ export async function prepareNotificationsForMissedCallCase(
     supabase
       .from("missed_call_cases")
       .select(
-        "id, status, phone_normalized, deal_id, deal_url, deal_title, contact_name, manager_bitrix_user_id, manager_name, department_id, missed_count, last_missed_at, last_outbound_at, last_successful_callback_at, context"
+        "id, status, phone_normalized, contact_name, manager_bitrix_user_id, manager_name, department_id, missed_count, last_missed_at, last_outbound_at, last_successful_callback_at, deal_id, deal_url, deal_title, context"
       )
       .eq("id", caseId)
       .maybeSingle(),
@@ -357,7 +357,6 @@ export async function prepareNotificationsForMissedCallCase(
 
   mark(diag, "prepare_notifications_resolve_recipients_start", { missedCount: typedCase.missed_count });
 
-  const dealUrl = dealUrlForMessageTemplate(typedCase.deal_url, typedCase.deal_id);
   const managerUid = mid;
 
   let created = 0;
@@ -420,6 +419,12 @@ export async function prepareNotificationsForMissedCallCase(
         skippedExistingDeliveries++;
         skippedExistingForRule++;
         skippedRecipients.push({ role: r.recipient_role, reason: "skipped_existing_delivery" });
+        console.log("[ALERT] duplicate skipped", {
+          caseId: typedCase.id,
+          ruleId: rule.id,
+          role: r.recipient_role,
+          reason: "already_delivered_or_pending"
+        });
         continue;
       }
 
@@ -431,12 +436,14 @@ export async function prepareNotificationsForMissedCallCase(
       const minutesWithout =
         ctx.minutesSinceLastMissed === null ? "0" : String(ctx.minutesSinceLastMissed);
 
+      const caseDealId = typedCase.deal_id;
+      const displayDealUrl = dealUrlForMessageTemplate(typedCase.deal_url, caseDealId);
       const messageText = renderMessageTemplate(rule.message_template, {
         message: defaultMessageLineForRecipientRole(r.recipient_role),
         manager_name: displayManagerName,
-        deal_id: typedCase.deal_id,
-        deal_title: typedCase.deal_title?.trim() || "",
-        deal_url: dealUrl,
+        deal_id: caseDealId != null ? caseDealId : "",
+        deal_title: typedCase.deal_title?.trim() ?? "",
+        deal_url: displayDealUrl,
         contact_name: typedCase.contact_name,
         phone: formatPhoneForDisplay(typedCase.phone_normalized),
         missed_count: typedCase.missed_count,
@@ -473,10 +480,11 @@ export async function prepareNotificationsForMissedCallCase(
           skippedExistingDeliveries++;
           skippedExistingForRule++;
           skippedRecipients.push({ role: r.recipient_role, reason: "skipped_existing_delivery" });
-          console.log(`${LOG} skip_dedupe_delivery`, {
+          console.log("[ALERT] duplicate skipped", {
             caseId: typedCase.id,
             ruleId: rule.id,
-            role: r.recipient_role
+            role: r.recipient_role,
+            reason: "delivery_dedupe_or_existing_pending"
           });
           continue;
         }
@@ -485,6 +493,12 @@ export async function prepareNotificationsForMissedCallCase(
 
       deliveryCreatedForRule++;
       created++;
+      console.log("[ALERT] delivery queued", {
+        caseId: typedCase.id,
+        ruleId: rule.id,
+        recipient_role: r.recipient_role,
+        recipient_bitrix_user_id: r.bitrix_user_id
+      });
       if (r.recipient_source === "call_event_manager_bitrix_user_id_fallback") {
         managerRecipientFallbackUsed = true;
       }
@@ -561,7 +575,7 @@ export async function explainMissedCallAlertRulesForCase(
     supabase
       .from("missed_call_cases")
       .select(
-        "id, status, phone_normalized, deal_id, deal_url, deal_title, contact_name, manager_bitrix_user_id, manager_name, department_id, missed_count, last_missed_at, last_outbound_at, last_successful_callback_at, context"
+        "id, status, phone_normalized, contact_name, manager_bitrix_user_id, manager_name, department_id, missed_count, last_missed_at, last_outbound_at, last_successful_callback_at, deal_id, deal_url, deal_title, context"
       )
       .eq("id", caseId)
       .maybeSingle(),

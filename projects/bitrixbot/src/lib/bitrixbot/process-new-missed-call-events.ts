@@ -7,7 +7,6 @@ import {
 } from "@/src/lib/bitrixbot/prepare-notifications-for-missed-call-case";
 import {
   upsertMissedCallCaseFromEvent,
-  type DealEnrichmentCallSnapshot,
   type UpsertMissedCallCaseResult
 } from "@/src/lib/bitrixbot/upsert-missed-call-case-from-event";
 import { chunkIdsForInFilter } from "@/src/lib/bitrixbot/supabase-in-filter-chunks";
@@ -47,34 +46,6 @@ export type UpsertFailureDiag = {
   /** true если сработал внешний timeout (событие помечено retryable_error). */
   retryScheduled?: boolean;
 };
-
-export type DealEnrichmentSummary = {
-  /** События, где после enrich есть bitrix_deal_id. */
-  found: number;
-  /** Нормальный исход: сделку не удалось сопоставить. */
-  notFound: number;
-  /** Сделка найдена по CRM activity. */
-  byActivity: number;
-  /** Сделка найдена по телефону. */
-  byPhone: number;
-  /** Исключения / сбой Bitrix / persist. */
-  errors: number;
-};
-
-function bumpDealEnrichmentSummary(agg: DealEnrichmentSummary, snap: DealEnrichmentCallSnapshot) {
-  const err = snap.enrichmentError ?? "";
-  if (err.startsWith("enrichment_exception") || err.includes("activity_fetch_failed")) {
-    agg.errors++;
-    return;
-  }
-  if (snap.hasDealId) {
-    agg.found++;
-    if (snap.source === "crm_activity") agg.byActivity++;
-    else if (snap.source === "phone_lookup") agg.byPhone++;
-    return;
-  }
-  agg.notFound++;
-}
 
 async function markProcessingRetryableByCallEventId(
   supabase: ReturnType<typeof createServiceRoleClient>,
@@ -181,8 +152,6 @@ export type ProcessNewMissedCallEventsSummary = {
   upsertFailures: UpsertFailureDiag[];
   /** События, помеченные retryable_error после timeout (не failedEvents). */
   recoverableUpsertErrors: number;
-  /** Агрегат обогащения сделки по обработанным событиям (не warning). */
-  dealEnrichment: DealEnrichmentSummary;
   /** Есть ли что показать как warning в UI (таймауты, failedEvents, missing employees). */
   issuesPresent: boolean;
   /** Rows returned from the missed-call candidate query (bounded batch). */
@@ -214,14 +183,6 @@ function uniqNonEmpty(vals: (string | null | undefined)[]): string[] {
   }
   return out;
 }
-
-const emptyDealEnrichment = (): DealEnrichmentSummary => ({
-  found: 0,
-  notFound: 0,
-  byActivity: 0,
-  byPhone: 0,
-  errors: 0
-});
 
 function alertPrepRuleDebugEnabled(): boolean {
   const v = process.env.ALERT_PREP_RULE_DEBUG?.trim().toLowerCase();
@@ -294,7 +255,6 @@ export async function processNewMissedCallEvents(
       employeeNotFound: [],
       upsertFailures: [],
       recoverableUpsertErrors: 0,
-      dealEnrichment: emptyDealEnrichment(),
       issuesPresent: false,
       fetchedCandidateEvents: 0,
       alreadyProcessedCandidates: 0,
@@ -363,7 +323,6 @@ export async function processNewMissedCallEvents(
   let createdDeliveries = 0;
   let skippedExistingDeliveries = 0;
   const skippedReasons: Record<string, number> = {};
-  const dealEnrichment = emptyDealEnrichment();
   let recoverableUpsertErrors = 0;
 
   const upsertTimeoutMs = parseUpsertTimeoutMs();
@@ -426,8 +385,6 @@ export async function processNewMissedCallEvents(
       if (res.updatedCase) updatedCases++;
       warnings.push(...res.warnings);
 
-      if (res.dealEnrichment) bumpDealEnrichmentSummary(dealEnrichment, res.dealEnrichment);
-
       let deliveryFallbackUsed = false;
       if (res.caseId) {
         const prepDiag = { lastStage: "prepare_notifications_start" };
@@ -487,8 +444,7 @@ export async function processNewMissedCallEvents(
     failedEvents > 0 ||
     recoverableUpsertErrors > 0 ||
     upsertFailures.some((f) => f.retryScheduled !== true) ||
-    employeeNotFound.length > 0 ||
-    dealEnrichment.errors > 0;
+    employeeNotFound.length > 0;
 
   const summary: ProcessNewMissedCallEventsSummary = {
     scannedEvents: toProcess.length,
@@ -504,7 +460,6 @@ export async function processNewMissedCallEvents(
     employeeNotFound,
     upsertFailures,
     recoverableUpsertErrors,
-    dealEnrichment,
     issuesPresent,
     fetchedCandidateEvents,
     alreadyProcessedCandidates,

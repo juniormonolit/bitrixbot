@@ -65,37 +65,22 @@ function hasActionIssues(lastResult: unknown): boolean {
   return false;
 }
 
-function getMissedCallsSummaryFromActionResult(
-  lastResult: unknown
-):
-  | {
-      processedEvents?: number;
-      skippedEvents?: number;
-      skippedReasons?: Record<string, number>;
-      recoverableUpsertErrors?: number;
-      dealEnrichment?: {
-        found: number;
-        notFound: number;
-        byActivity: number;
-        byPhone: number;
-        errors: number;
-      };
-      failedEvents?: number;
-      upsertFailures?: unknown[];
-      employeeNotFound?: unknown[];
-      warnings?: unknown[];
-    }
-  | undefined {
+type MissedCallsSummaryShape = {
+  processedEvents?: number;
+  skippedEvents?: number;
+  skippedReasons?: Record<string, number>;
+  recoverableUpsertErrors?: number;
+  failedEvents?: number;
+  upsertFailures?: unknown[];
+  employeeNotFound?: unknown[];
+  warnings?: unknown[];
+};
+
+function getMissedCallsSummaryFromActionResult(lastResult: unknown): MissedCallsSummaryShape | undefined {
   if (!lastResult || typeof lastResult !== "object" || lastResult === null) return undefined;
   const r = lastResult as {
-    summary?: {
-      failedEvents?: number;
+    summary?: MissedCallsSummaryShape & {
       missedCalls?: { result?: Record<string, unknown> };
-      processedEvents?: number;
-      skippedEvents?: number;
-      skippedReasons?: Record<string, number>;
-      recoverableUpsertErrors?: number;
-      dealEnrichment?: Record<string, number>;
     };
   };
   const direct = r.summary;
@@ -106,62 +91,14 @@ function getMissedCallsSummaryFromActionResult(
       typeof direct.skippedEvents === "number" ||
       (direct.skippedReasons && typeof direct.skippedReasons === "object"))
   ) {
-    return direct as {
-      processedEvents?: number;
-      skippedEvents?: number;
-      skippedReasons?: Record<string, number>;
-      recoverableUpsertErrors?: number;
-      dealEnrichment?: {
-        found: number;
-        notFound: number;
-        byActivity: number;
-        byPhone: number;
-        errors: number;
-      };
-      failedEvents?: number;
-      upsertFailures?: unknown[];
-      employeeNotFound?: unknown[];
-      warnings?: unknown[];
-    };
+    return direct;
   }
   if (r.summary && typeof r.summary.failedEvents === "number") {
-    return r.summary as {
-      processedEvents?: number;
-      skippedEvents?: number;
-      skippedReasons?: Record<string, number>;
-      recoverableUpsertErrors?: number;
-      dealEnrichment?: {
-        found: number;
-        notFound: number;
-        byActivity: number;
-        byPhone: number;
-        errors: number;
-      };
-      failedEvents?: number;
-      upsertFailures?: unknown[];
-      employeeNotFound?: unknown[];
-      warnings?: unknown[];
-    };
+    return r.summary;
   }
   const inner = r.summary?.missedCalls?.result;
   if (inner && typeof inner === "object") {
-    return inner as {
-      processedEvents?: number;
-      skippedEvents?: number;
-      skippedReasons?: Record<string, number>;
-      recoverableUpsertErrors?: number;
-      dealEnrichment?: {
-        found: number;
-        notFound: number;
-        byActivity: number;
-        byPhone: number;
-        errors: number;
-      };
-      failedEvents?: number;
-      upsertFailures?: unknown[];
-      employeeNotFound?: unknown[];
-      warnings?: unknown[];
-    };
+    return inner as MissedCallsSummaryShape;
   }
   return undefined;
 }
@@ -296,12 +233,6 @@ export function ManualActions({ debugSecret }: { debugSecret: string }) {
             <span>
               , recoverableUpsertErrors=
               <span className="text-amber-100/90">{String(sum.recoverableUpsertErrors)}</span>
-            </span>
-          ) : null}
-          {sum?.dealEnrichment ? (
-            <span>
-              , dealEnrichment=
-              <code className="text-sky-100/85">{JSON.stringify(sum.dealEnrichment)}</code>
             </span>
           ) : null}
         </div>

@@ -1,11 +1,7 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { withTimeout } from "@/src/lib/bitrixbot/async-timeout";
 import { getAlertingSettings } from "@/src/lib/bitrixbot/get-alerting-settings";
-import {
-  maybeReenrichCaseBeforeSend,
-  refreshPendingDeliveryMessageDealLine,
-  refreshPendingDeliveryMessagePhoneLine
-} from "@/src/lib/bitrixbot/re-enrich-case-deal";
+import { refreshPendingDeliveryMessagePhoneLine } from "@/src/lib/bitrixbot/re-enrich-case-deal";
 import { sendBitrixMessage } from "@/src/lib/bitrixbot/send-bitrix-message";
 import { outboundActivityBlocksMissedPrepare } from "@/src/lib/bitrixbot/alerting-prepare-outbound-guard";
 import { isValidAlertRecipientBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
@@ -209,32 +205,6 @@ export async function processPendingDeliveries(
     }
 
     try {
-      const quick = await withTimeout(maybeReenrichCaseBeforeSend(supabase, d.case_id), 2500, `re_enrich:${d.case_id}`);
-      if (quick.attempted && !quick.chosen) {
-        warnings.push(`re_enrich_no_deal:${d.case_id}`);
-      }
-    } catch (e) {
-      const m = e instanceof Error ? e.message : String(e);
-      warnings.push(`re_enrich_timeout_or_error:${d.case_id}:${m}`);
-    }
-    try {
-      const patched = await refreshPendingDeliveryMessageDealLine(supabase, d.id, d.case_id);
-      if (patched.updated) {
-        warnings.push(`delivery_deal_line_patched:${d.id}`);
-        const { data: dFresh } = await supabase
-          .from("notification_deliveries")
-          .select("message_text")
-          .eq("id", d.id)
-          .maybeSingle();
-        if (dFresh && typeof (dFresh as { message_text?: string }).message_text === "string") {
-          messageText = (dFresh as { message_text: string }).message_text;
-        }
-      }
-    } catch {
-      warnings.push(`delivery_deal_line_patch_failed:${d.id}`);
-    }
-
-    try {
       const phonePatched = await refreshPendingDeliveryMessagePhoneLine(supabase, d.id, d.case_id);
       if (phonePatched.updated) {
         warnings.push(`delivery_phone_line_patched:${d.id}`);
@@ -363,6 +333,11 @@ export async function processPendingDeliveries(
         .eq("id", d.id);
       if (updErr) throw new Error(updErr.message);
       sentDeliveries++;
+      console.log("[ALERT] delivered", {
+        delivery_id: d.id,
+        case_id: d.case_id,
+        recipient_bitrix_user_id: d.recipient_bitrix_user_id
+      });
 
       if (
         settings.mirror_enabled &&
@@ -420,6 +395,11 @@ export async function processPendingDeliveries(
         .eq("id", d.id);
       if (updErr) throw new Error(updErr.message);
       failedDeliveries++;
+      console.log("[ALERT] failed", {
+        delivery_id: d.id,
+        case_id: d.case_id,
+        error: sendRes.errorMessage ?? "send_failed"
+      });
     }
   }
 

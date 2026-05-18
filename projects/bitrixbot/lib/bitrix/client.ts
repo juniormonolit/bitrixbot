@@ -1,4 +1,5 @@
 import { env } from "@/lib/env";
+import { assertBitrixRestCallAllowed } from "@/lib/bitrix/bitrix-rest-context";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -23,6 +24,7 @@ export type BitrixCallMetaResult<T> = {
 } & BitrixListMeta;
 
 async function bitrixRequestJson(method: string, body: JsonRecord): Promise<unknown> {
+  assertBitrixRestCallAllowed(method);
   const url = `${env.BITRIX_REST_BASE_URL}${method}.json`;
 
   const res = await fetch(url, {

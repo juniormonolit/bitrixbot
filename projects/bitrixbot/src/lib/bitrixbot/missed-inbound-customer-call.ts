@@ -102,6 +102,11 @@ export function evaluateMissedInboundCustomerCall(
   }
 
   if (!normalizeBitrixUserId(callEvent.manager_bitrix_user_id)) {
+    console.log("[alerting:missed-calls] Skipping call without manager_id", {
+      call_event_id: callEvent.id,
+      event: eventName,
+      call_type: callType
+    });
     return {
       ok: false,
       reason: "skip_missing_manager",

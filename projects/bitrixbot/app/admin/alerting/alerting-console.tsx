@@ -86,9 +86,6 @@ const SAMPLE_TEMPLATE_VALUES = {
   message: "СРОЧНО ПЕРЕЗВОНИ КЛИЕНТУ. ДО ТЕБЯ НЕ ДОЗВОНИЛИСЬ.",
   manager_name: "Иван Иванов",
   phone: "+79001234567",
-  deal_id: "19241",
-  deal_title: "Поставка оборудования",
-  deal_url: "https://example.bitrix24.ru/crm/deal/details/19241/",
   missed_at: "2026-05-13T10:15:00+03:00",
   case_id: "00000000-0000-4000-8000-000000000001",
   main_recipient: "Иван Иванов (manager)",
@@ -263,7 +260,7 @@ export function AlertingConsole(props: {
   }, []);
 
   const varsNote =
-    "Переменные: {message}, {manager_name}, {phone}, {deal_id}, {deal_title}, {deal_url}, {missed_at}, {case_id}, {contact_name}, {missed_count}, {minutes_without_callback}, {recipient_role}, {recipient_name}, {main_recipient} — также {{...}}. Переносы: в БД могут быть \\n; preview и отправка нормализуются в реальные переводы строк.";
+    "Переменные: {message}, {manager_name}, {phone}, {missed_at}, {case_id}, {contact_name}, {missed_count}, {minutes_without_callback}, {recipient_role}, {recipient_name}, {main_recipient} — также {{...}} (устаревшие deal_* подставляются пустыми). Переносы: в БД могут быть \\n; preview и отправка нормализуются в реальные переводы строк.";
 
   return (
     <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 px-6 py-10">

@@ -71,7 +71,6 @@ const DEFAULT_NEW_ALERT_RULE_TEMPLATE = `{{message}}
 
 Менеджер: {{manager_name}}
 Телефон: {{phone}}
-Сделка: {{deal_url}}
 Пропущенных подряд: {{missed_count}}
 Время без исходящего: {{minutes_without_callback}} мин.`;
 

@@ -5,10 +5,8 @@ import { syncOrgStructureFromBitrixAndRebuild } from "@/src/lib/bitrixbot/sync-o
 
 /**
  * Ежедневное автообновление структуры (Vercel Cron → см. vercel.json).
+ * Расписание: `0 1 * * *` UTC = 04:00 МСК (UTC+3, без DST).
  * Аутентификация: Authorization: Bearer &lt;CRON_SECRET&gt; или x-debug-secret / DEBUG_SECRET.
- *
- * TODO: сопоставить org_structure_auto_refresh_time_local с часовым поясом деплоя;
- * сейчас расписание cron задаётся в UTC в vercel.json (по умолчанию 04:00 UTC).
  */
 function isCronAuthorized(req: Request): boolean {
   const bearer = req.headers.get("authorization");
