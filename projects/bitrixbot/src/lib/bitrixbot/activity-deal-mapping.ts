@@ -66,16 +66,21 @@ export function getCrmActivityIdForDealMapping(column: unknown, rawPayload: unkn
 export type ActivityDealMappingConfig = {
   url: string;
   serviceKey: string;
+  /** PostgREST schema (exposed in API). Default `public`. */
+  schema: string;
   table: string;
 };
 
 /**
  * Optional external Supabase with rows: `bitrix_activity_id` → `deal_id`.
- * Uses only `MAPPING_SUPABASE_URL` + `MAPPING_SUPABASE_SERVICE_ROLE_KEY` (+ optional `MAPPING_SUPABASE_TABLE`).
+ * Env: `MAPPING_SUPABASE_URL`, `MAPPING_SUPABASE_SERVICE_ROLE_KEY`,
+ * optional `MAPPING_SUPABASE_SCHEMA` (default `public`), `MAPPING_SUPABASE_TABLE` (default `bitrix_activity_deals`).
  */
 export function getActivityDealMappingConfig(): ActivityDealMappingConfig | null {
   const url = (process.env.MAPPING_SUPABASE_URL ?? "").trim();
   const serviceKey = (process.env.MAPPING_SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
+  const schemaRaw = (process.env.MAPPING_SUPABASE_SCHEMA ?? "public").trim();
+  const schema = schemaRaw === "" ? "public" : schemaRaw;
   const table = (process.env.MAPPING_SUPABASE_TABLE ?? "bitrix_activity_deals").trim();
 
   if (!url || !serviceKey) {
@@ -83,7 +88,11 @@ export function getActivityDealMappingConfig(): ActivityDealMappingConfig | null
     return null;
   }
 
-  return { url, serviceKey, table };
+  return { url, serviceKey, schema, table };
+}
+
+function fromMappingTable(client: SupabaseClient, cfg: ActivityDealMappingConfig) {
+  return cfg.schema === "public" ? client.from(cfg.table) : client.schema(cfg.schema).from(cfg.table);
 }
 
 export function isActivityDealMappingConfigured(): boolean {
@@ -145,15 +154,20 @@ export async function resolveDealIdByActivityId(
   /** String filter works for PostgREST against int8, int4, and text columns. */
   const normalizedLookupId = normalizeCrmActivityIdForLookup(activityId) ?? String(activityId);
 
-  const { data, error } = await client
-    .from(cfg.table)
+  const { data, error } = await fromMappingTable(client, cfg)
     .select("deal_id")
     .eq("bitrix_activity_id", normalizedLookupId)
     .limit(2);
 
   let foundDealId: number | null = null;
   if (error) {
-    console.error(`${LOG} query_failed`, { activity_id: activityId, message: error.message });
+    console.error(`${LOG} query_failed`, {
+      activity_id: activityId,
+      crm_activity_id: logCtx?.crm_activity_id ?? null,
+      mapping_schema: cfg.schema,
+      mapping_table: cfg.table,
+      message: error.message
+    });
   } else {
     const rows = (data ?? []) as Array<{ deal_id?: unknown }>;
     if (rows.length > 1) {
@@ -165,8 +179,7 @@ export async function resolveDealIdByActivityId(
   }
 
   console.log(`${LOG} activity_mapping_lookup`, {
-    crm_activity_id: logCtx?.crm_activity_id ?? null,
-    normalized_lookup_id: normalizedLookupId,
+    mapping_schema: cfg.schema,
     mapping_table: cfg.table,
     filter_column: "bitrix_activity_id",
     found_deal_id: foundDealId,

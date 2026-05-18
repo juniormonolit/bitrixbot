@@ -6,11 +6,13 @@
  *   npx tsx scripts/check-activity-deal-mapping.ts --activity 12345
  *
  * Env (optional for live resolve test):
- *   MAPPING_SUPABASE_URL, MAPPING_SUPABASE_SERVICE_ROLE_KEY, MAPPING_SUPABASE_TABLE
+ *   MAPPING_SUPABASE_URL, MAPPING_SUPABASE_SERVICE_ROLE_KEY,
+ *   MAPPING_SUPABASE_SCHEMA (default public), MAPPING_SUPABASE_TABLE
  */
 
 import {
   __resetActivityDealMappingModuleForDev,
+  getActivityDealMappingConfig,
   getCrmActivityIdForDealMapping,
   isActivityDealMappingConfigured,
   parseBitrixActivityIdForMapping,
@@ -53,6 +55,10 @@ async function main() {
   __resetActivityDealMappingModuleForDev();
   const configured = isActivityDealMappingConfigured();
   console.log("isActivityDealMappingConfigured:", configured);
+  const cfgPreview = getActivityDealMappingConfig();
+  if (cfgPreview != null) {
+    console.log("mapping resolved →", { schema: cfgPreview.schema, table: cfgPreview.table });
+  }
 
   let act = argNum("--activity");
   if (act == null && configured) {
