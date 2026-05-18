@@ -41,7 +41,7 @@ type CallEventRow = {
   call_duration_seconds: number | null;
   failed_code: string | null;
   bitrix_deal_id: string | null;
-  crm_activity_id: string | null;
+  crm_activity_id: string | number | null;
   bitrix_call_id: string | null;
   raw_payload: unknown;
 };
@@ -295,7 +295,10 @@ export async function upsertMissedCallCaseFromEvent(
     const mappingConfigured = isActivityDealMappingConfigured();
     let resolvedDealId: number | null = null;
     if (mappingConfigured && activityIdNum != null) {
-      resolvedDealId = await resolveDealIdByActivityId(activityIdNum);
+      resolvedDealId = await resolveDealIdByActivityId(activityIdNum, {
+        crm_activity_id:
+          activityRaw ?? (ce.crm_activity_id != null ? String(ce.crm_activity_id) : null)
+      });
       if (resolvedDealId != null) {
         console.log(`${LOG} deal_resolved`, { activity_id: activityIdNum, deal_id: resolvedDealId });
       } else {
@@ -313,7 +316,8 @@ export async function upsertMissedCallCaseFromEvent(
       resolvedDealId
     });
     if (dealGate.block) {
-      const crmActivityLog = (activityRaw ?? ce.crm_activity_id ?? "").trim() || null;
+      const crmActivityLog =
+        (activityRaw ?? (ce.crm_activity_id != null ? String(ce.crm_activity_id) : "")).trim() || null;
       const skipPayload = {
         call_event_id: ce.id,
         crm_activity_id: crmActivityLog,

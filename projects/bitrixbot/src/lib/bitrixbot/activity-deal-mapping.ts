@@ -12,40 +12,55 @@ function warnMappingDisabledOnce(): void {
   console.warn("Activity-deal mapping disabled: env vars missing");
 }
 
-function getString(value: unknown): string | null {
-  if (typeof value === "string") {
-    const v = value.trim();
-    return v ? v : null;
+/**
+ * Coerce `call_events.crm_activity_id` (PostgREST may return string, number, or bigint)
+ * and webhook payload fields to a canonical digit string for lookup against
+ * external `mapping.bitrix_activity_id`.
+ */
+export function normalizeCrmActivityIdForLookup(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === "bigint") {
+    const s = value.toString();
+    return /^\d{1,18}$/.test(s) ? s : null;
   }
-  if (typeof value === "number") return String(value);
+  if (typeof value === "number" && Number.isFinite(value) && Number.isInteger(value)) {
+    if (!Number.isSafeInteger(value)) return null;
+    return String(value);
+  }
+  if (typeof value === "string") {
+    const t = value.trim().replace(/\s+/g, "");
+    if (!t) return null;
+    if (!/^\d{1,18}$/.test(t)) return null;
+    return t;
+  }
   return null;
 }
 
 /**
  * Bitrix `CRM_ACTIVITY_ID` in webhooks is a numeric string (DB column may be int8 or text).
  * Prefer an indexed `bitrix_activity_id` column on the mapping table for fast lookups.
+ * Lookup equality: `call_events.crm_activity_id` (normalized) → `mapping.bitrix_activity_id`.
  */
-export function parseBitrixActivityIdForMapping(raw: string | null | undefined): number | null {
-  if (raw == null) return null;
-  const s = String(raw).trim();
-  if (!/^\d{1,18}$/.test(s)) return null;
+export function parseBitrixActivityIdForMapping(raw: unknown): number | null {
+  const s = normalizeCrmActivityIdForLookup(raw);
+  if (!s) return null;
   const n = Number(s);
   if (!Number.isFinite(n) || !Number.isSafeInteger(n)) return null;
   return n;
 }
 
 /**
- * CRM activity id for mapping: DB column first, then `data` / `DATA` from webhook
+ * CRM activity id for mapping: `call_events.crm_activity_id` first, then `data` / `DATA` from webhook
  * (`CRM_ACTIVITY_ID` / `crm_activity_id`).
  */
-export function getCrmActivityIdForDealMapping(
-  column: string | null | undefined,
-  rawPayload: unknown
-): string | null {
-  const c = column?.trim() ?? "";
-  if (c) return c;
+export function getCrmActivityIdForDealMapping(column: unknown, rawPayload: unknown): string | null {
+  const fromCol = normalizeCrmActivityIdForLookup(column);
+  if (fromCol) return fromCol;
   const data = extractVoximplantDataPayload(rawPayload);
-  return getString(data.CRM_ACTIVITY_ID) ?? getString(data.crm_activity_id);
+  return (
+    normalizeCrmActivityIdForLookup(data.CRM_ACTIVITY_ID) ??
+    normalizeCrmActivityIdForLookup(data.crm_activity_id)
+  );
 }
 
 export type ActivityDealMappingConfig = {
@@ -107,37 +122,59 @@ function parseDealIdFromMappingRow(value: unknown): number | null {
   return null;
 }
 
+export type ResolveDealIdLogContext = {
+  /** Raw `crm_activity_id` from `call_events` or payload (before numeric parse). */
+  crm_activity_id?: string | null;
+};
+
 /**
  * Resolve Bitrix deal id for a call activity via external mapping DB only (no Bitrix CRM REST).
+ * Filters with `.eq("bitrix_activity_id", …)` — must match `call_events.crm_activity_id` (normalized).
  * Not finding a row is normal — returns null.
  */
-export async function resolveDealIdByActivityId(activityId: number): Promise<number | null> {
+export async function resolveDealIdByActivityId(
+  activityId: number,
+  logCtx?: ResolveDealIdLogContext | null
+): Promise<number | null> {
   const cfg = getActivityDealMappingConfig();
   if (!cfg) return null;
 
   const client = getMappingDbClient();
   if (!client) return null;
 
-  /** String value works for PostgREST on int8 or text columns. */
-  const activityKey = String(activityId);
+  /** String filter works for PostgREST against int8, int4, and text columns. */
+  const normalizedLookupId = normalizeCrmActivityIdForLookup(activityId) ?? String(activityId);
+
   const { data, error } = await client
     .from(cfg.table)
     .select("deal_id")
-    .eq("bitrix_activity_id", activityKey)
+    .eq("bitrix_activity_id", normalizedLookupId)
     .limit(2);
 
+  let foundDealId: number | null = null;
   if (error) {
     console.error(`${LOG} query_failed`, { activity_id: activityId, message: error.message });
-    return null;
+  } else {
+    const rows = (data ?? []) as Array<{ deal_id?: unknown }>;
+    if (rows.length > 1) {
+      console.warn(`${LOG} multiple_rows_using_first`, { activity_id: activityId, count: rows.length });
+    }
+    if (rows.length > 0) {
+      foundDealId = parseDealIdFromMappingRow(rows[0]?.deal_id);
+    }
   }
 
-  const rows = (data ?? []) as Array<{ deal_id?: unknown }>;
-  if (rows.length === 0) return null;
-  if (rows.length > 1) {
-    console.warn(`${LOG} multiple_rows_using_first`, { activity_id: activityId, count: rows.length });
-  }
+  console.log(`${LOG} activity_mapping_lookup`, {
+    crm_activity_id: logCtx?.crm_activity_id ?? null,
+    normalized_lookup_id: normalizedLookupId,
+    mapping_table: cfg.table,
+    filter_column: "bitrix_activity_id",
+    found_deal_id: foundDealId,
+    query_error: error ? error.message : null
+  });
 
-  return parseDealIdFromMappingRow(rows[0]?.deal_id);
+  if (error) return null;
+  return foundDealId;
 }
 
 /** Alias matching integration docs (`resolveDealId(activityId)`). */

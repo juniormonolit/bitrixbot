@@ -43,19 +43,28 @@ async function main() {
     "column set ->",
     getCrmActivityIdForDealMapping("111", samplePayload)
   );
+  console.log(
+    "column as number (Supabase int) ->",
+    getCrmActivityIdForDealMapping(2251176 as unknown, {})
+  );
+  console.log("parseBitrixActivityIdForMapping(2251176) ->", parseBitrixActivityIdForMapping(2251176));
 
   console.log("\n--- mapping env ---");
   __resetActivityDealMappingModuleForDev();
   const configured = isActivityDealMappingConfigured();
   console.log("isActivityDealMappingConfigured:", configured);
 
-  const act = argNum("--activity");
+  let act = argNum("--activity");
+  if (act == null && configured) {
+    act = 2251176;
+    console.log("\n--- live resolve default activity 2251176 (--activity <id> to override) ---");
+  }
   if (act != null) {
     console.log(`\n--- resolveDealIdByActivityId(${act}) ---`);
-    const deal = await resolveDealIdByActivityId(act);
+    const deal = await resolveDealIdByActivityId(act, { crm_activity_id: String(act) });
     console.log("deal_id:", deal);
-  } else if (configured) {
-    console.log("\n(pass --activity <id> to test a live mapping lookup)");
+  } else {
+    console.log("\n(mapping env missing — set MAPPING_SUPABASE_* to test live lookup)");
   }
 
   console.log("\n--- env missing scenario (reset + no MAPPING_* ) ---");
