@@ -1,60 +1,34 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTimeout } from "@/src/lib/bitrixbot/async-timeout";
-import { callEventHasOutboundSignals } from "@/src/lib/bitrixbot/call-event-outbound";
-import { collectCallEventIdsFromCaseContext } from "@/src/lib/bitrixbot/case-call-events";
+import { findFirstSuccessfulContactAfterMissed } from "@/src/lib/bitrixbot/find-successful-contact-after-missed";
 
 const DB_MS = 2_500;
 
 /**
- * Blocks preparing missed-call notifications when CRM traffic clearly shows outbound:
- * - newest call_events row for this phone is outbound, or
- * - case.context last trigger call_event id points at outbound ingest.
- *
- * Covers SLA / escalation paths that do not attach a fresh inbound missed event.
+ * Блокирует подготовку missed-call уведомлений, если после `last_missed_at` уже был
+ * успешный созвон с клиентом по этому номеру (входящий или исходящий).
  */
 export async function outboundActivityBlocksMissedPrepare(
   supabase: SupabaseClient,
-  input: { phone_normalized: string; context: unknown }
+  input: {
+    phone_normalized: string;
+    last_missed_at: string;
+    manager_bitrix_user_id: string | null;
+  }
 ): Promise<string | null> {
   const phone = input.phone_normalized?.trim();
   if (!phone) return null;
 
-  const { data: latest, error: latestErr } = await withTimeout(
-    supabase
-      .from("call_events")
-      .select("call_direction, call_type_raw, raw_payload")
-      .eq("phone_normalized", phone)
-      .order("occurred_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+  const hit = await withTimeout(
+    findFirstSuccessfulContactAfterMissed(supabase, {
+      phone_normalized: phone,
+      manager_bitrix_user_id: input.manager_bitrix_user_id,
+      last_missed_at: input.last_missed_at
+    }),
     DB_MS,
-    "outbound_guard_latest_phone_call"
+    "contact_restored_after_missed_lookup"
   );
-  if (latestErr) throw new Error(latestErr.message);
-  if (latest && callEventHasOutboundSignals(latest)) {
-    return "latest_call_on_phone_is_outbound";
-  }
-  if (latest) {
-    return null;
-  }
 
-  const ids = collectCallEventIdsFromCaseContext(input.context);
-  const triggerId = ids[0];
-  if (triggerId) {
-    const { data: trig, error: trigErr } = await withTimeout(
-      supabase
-        .from("call_events")
-        .select("call_direction, call_type_raw, raw_payload")
-        .eq("id", triggerId)
-        .maybeSingle(),
-      DB_MS,
-      "outbound_guard_context_trigger_call"
-    );
-    if (trigErr) throw new Error(trigErr.message);
-    if (trig && callEventHasOutboundSignals(trig)) {
-      return "case_context_trigger_call_event_outbound";
-    }
-  }
-
+  if (hit) return "contact_restored_after_missed";
   return null;
 }

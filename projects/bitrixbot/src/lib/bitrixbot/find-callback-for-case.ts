@@ -1,4 +1,8 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
+import {
+  findFirstSuccessfulContactAfterMissed,
+  type SuccessfulContactCallRow
+} from "@/src/lib/bitrixbot/find-successful-contact-after-missed";
 
 type MissedCallCaseRow = {
   id: string;
@@ -8,16 +12,24 @@ type MissedCallCaseRow = {
   last_missed_at: string;
 };
 
-type CallEventRow = {
-  id: string;
-  occurred_at: string;
-  manager_bitrix_user_id: string | null;
-};
-
 export type FindCallbackResult =
-  | { found: false; matchedBy: null; callbackCallEventId: null; callbackOccurredAt: null; warning?: string }
-  | { found: true; matchedBy: "phone+manager" | "phone_only"; callbackCallEventId: string; callbackOccurredAt: string };
+  | {
+      found: false;
+      matchedBy: null;
+      callbackCallEventId: null;
+      callbackOccurredAt: null;
+      matchedCall?: null;
+      warning?: string;
+    }
+  | {
+      found: true;
+      matchedBy: "phone+manager" | "phone_only";
+      callbackCallEventId: string;
+      callbackOccurredAt: string;
+      matchedCall: SuccessfulContactCallRow;
+    };
 
+/** Обнаружить успешный созвон с клиентом после `last_missed_at` (входящий или исходящий). */
 export async function findCallbackForCase(caseId: string): Promise<FindCallbackResult> {
   const supabase = createServiceRoleClient();
 
@@ -42,43 +54,22 @@ export async function findCallbackForCase(caseId: string): Promise<FindCallbackR
     return { found: false, matchedBy: null, callbackCallEventId: null, callbackOccurredAt: null };
   }
 
-  const baseQuery = supabase
-    .from("call_events")
-    .select("id, occurred_at, manager_bitrix_user_id")
-    .eq("status", "success")
-    .eq("phone_normalized", c.phone_normalized)
-    .gte("occurred_at", c.last_missed_at)
-    .order("occurred_at", { ascending: true })
-    .limit(1);
+  const match = await findFirstSuccessfulContactAfterMissed(supabase, {
+    phone_normalized: c.phone_normalized,
+    manager_bitrix_user_id: c.manager_bitrix_user_id,
+    last_missed_at: c.last_missed_at
+  });
 
-  if (c.manager_bitrix_user_id) {
-    const { data: strict, error: strictErr } = await baseQuery
-      .eq("manager_bitrix_user_id", c.manager_bitrix_user_id)
-      .maybeSingle();
-    if (strictErr) throw new Error(strictErr.message);
-    if (strict) {
-      const ev = strict as CallEventRow;
-      return {
-        found: true,
-        matchedBy: "phone+manager",
-        callbackCallEventId: ev.id,
-        callbackOccurredAt: ev.occurred_at
-      };
-    }
-  }
-
-  const { data: fallback, error: fbErr } = await baseQuery.maybeSingle();
-  if (fbErr) throw new Error(fbErr.message);
-  if (!fallback) {
+  if (!match) {
     return { found: false, matchedBy: null, callbackCallEventId: null, callbackOccurredAt: null };
   }
 
-  const ev = fallback as CallEventRow;
+  const row = match.row;
   return {
     found: true,
-    matchedBy: "phone_only",
-    callbackCallEventId: ev.id,
-    callbackOccurredAt: ev.occurred_at
+    matchedBy: match.matchedBy,
+    callbackCallEventId: row.id,
+    callbackOccurredAt: row.occurred_at,
+    matchedCall: row
   };
 }
-

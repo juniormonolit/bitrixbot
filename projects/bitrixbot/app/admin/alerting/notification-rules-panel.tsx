@@ -309,7 +309,7 @@ export function NotificationRulesPanel(props: { rules: AlertNotificationRuleRow[
         <code className="text-white/80">condition_operator</code> задаёт AND/OR между порогом пропущенных и минутами без
         успешного перезвона. Дедуп доставок:{" "}
         <code className="text-white/80">case_id + alert_rule_id + recipient_bitrix_user_id</code>. Успешный callback
-        помечает кейс <code className="text-white/80">resolved</code> (см. resolve-missed-call-case-by-callback).
+        помечает кейс <code className="text-white/80">resolved_after_contact</code> (см. resolve-missed-call-case-by-callback).
       </p>
       <form action={saveAlertNotificationRuleAction} className="flex flex-wrap items-end gap-2 rounded-lg border border-dashed border-white/15 p-3">
         <input type="hidden" name="create" value="1" />

@@ -288,11 +288,12 @@ export async function prepareNotificationsForMissedCallCase(
 
   const outboundPrepareBlock = await outboundActivityBlocksMissedPrepare(supabase, {
     phone_normalized: typedCase.phone_normalized,
-    context: typedCase.context
+    last_missed_at: typedCase.last_missed_at,
+    manager_bitrix_user_id: typedCase.manager_bitrix_user_id
   });
   if (outboundPrepareBlock) {
     warnings.push(`prepare_blocked_${outboundPrepareBlock}`);
-    console.log(`${LOG} blocked_outbound_prepare`, {
+    console.log(`${LOG} blocked_contact_restored_prepare`, {
       caseId,
       reason: outboundPrepareBlock,
       phone_normalized: typedCase.phone_normalized
@@ -655,13 +656,14 @@ export async function explainMissedCallAlertRulesForCase(
 
   const outboundPrepareBlock = await outboundActivityBlocksMissedPrepare(supabase, {
     phone_normalized: typedCase.phone_normalized,
-    context: typedCase.context
+    last_missed_at: typedCase.last_missed_at,
+    manager_bitrix_user_id: typedCase.manager_bitrix_user_id
   });
   if (outboundPrepareBlock) {
     return {
       caseId: typedCase.id,
       skipped: true,
-      skipReason: `outbound_blocked:${outboundPrepareBlock}`,
+      skipReason: `contact_restored_blocked:${outboundPrepareBlock}`,
       evaluations,
       warnings: [...warnings, `prepare_blocked_${outboundPrepareBlock}`]
     };

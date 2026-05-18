@@ -33,6 +33,11 @@ function failedCodesAgreeStrictly304(callEvent: CallEventForInboundFilter): bool
   return parts.every((c) => c === "304");
 }
 
+/** Паттерн «пропуск по 304» — такие звонки не считаются успешным контактом. */
+export function callEventIsStrictly304MissedPattern(callEvent: CallEventForInboundFilter): boolean {
+  return failedCodesAgreeStrictly304(callEvent);
+}
+
 export type MissedInboundCustomerCallEval =
   | { ok: true }
   | {

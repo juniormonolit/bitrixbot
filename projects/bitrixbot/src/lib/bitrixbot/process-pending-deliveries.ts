@@ -156,7 +156,7 @@ export async function processPendingDeliveries(
       const { data: caseMini, error: cmErr } = await withTimeout(
         supabase
           .from("missed_call_cases")
-          .select("phone_normalized, context, manager_bitrix_user_id")
+          .select("phone_normalized, manager_bitrix_user_id, last_missed_at")
           .eq("id", d.case_id)
           .maybeSingle(),
         2500,
@@ -165,8 +165,8 @@ export async function processPendingDeliveries(
       if (!cmErr && caseMini) {
         const typedMini = caseMini as {
           phone_normalized: string;
-          context?: unknown;
           manager_bitrix_user_id: string | null;
+          last_missed_at: string;
         };
 
         if (!isValidAlertRecipientBitrixUserId(typedMini.manager_bitrix_user_id)) {
@@ -184,7 +184,8 @@ export async function processPendingDeliveries(
 
         const blockReason = await outboundActivityBlocksMissedPrepare(supabase, {
           phone_normalized: typedMini.phone_normalized,
-          context: typedMini.context ?? null
+          last_missed_at: typedMini.last_missed_at,
+          manager_bitrix_user_id: typedMini.manager_bitrix_user_id
         });
         if (blockReason) {
           const { error: skipErr } = await supabase

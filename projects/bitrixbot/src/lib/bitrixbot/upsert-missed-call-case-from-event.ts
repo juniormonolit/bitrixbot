@@ -17,6 +17,7 @@ import { extractVoximplantDataPayload } from "@/src/lib/bitrixbot/voximplant-inb
 import { lookupEmployeeByBitrixUserId } from "@/src/lib/bitrixbot/employee-lookup";
 import { safeJsonTopKeys, safeNestedKeys } from "@/src/lib/bitrixbot/payload-diag";
 import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
+import { isSuccessfulContactCall, type SuccessfulContactCallLike } from "@/src/lib/bitrixbot/successful-contact-call";
 
 const LOG = "[alerting:process-missed-calls]";
 
@@ -181,15 +182,20 @@ async function hasSuccessfulCallSamePhoneBetween(
 
   const { data, error } = await supabase
     .from("call_events")
-    .select("id")
+    .select(
+      "id, status, phone_normalized, manager_bitrix_user_id, call_duration_seconds, failed_code, raw_payload"
+    )
     .eq("status", "success")
     .eq("phone_normalized", phoneNormalized)
     .gt("occurred_at", afterIso)
     .lt("occurred_at", beforeIso)
-    .limit(1)
-    .maybeSingle();
+    .order("occurred_at", { ascending: true })
+    .limit(40);
   if (error) supabaseErr("call_events.select(success_between)", error);
-  return Boolean(data);
+  for (const row of data ?? []) {
+    if (isSuccessfulContactCall(row as SuccessfulContactCallLike)) return true;
+  }
+  return false;
 }
 
 async function findExistingOpenCase(

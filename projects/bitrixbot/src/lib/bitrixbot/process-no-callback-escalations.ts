@@ -6,11 +6,11 @@ import { outboundActivityBlocksMissedPrepare } from "@/src/lib/bitrixbot/alertin
 type CaseRow = {
   id: string;
   phone_normalized: string;
-  context: unknown;
   missed_count: number;
   last_missed_at: string;
   last_outbound_at: string | null;
   last_successful_callback_at: string | null;
+  manager_bitrix_user_id: string | null;
 };
 
 export type NoCallbackEscalationsSummary = {
@@ -74,7 +74,7 @@ export async function processNoCallbackEscalations(
   const { data: cases, error: casesErr } = await supabase
     .from("missed_call_cases")
     .select(
-      "id, phone_normalized, context, missed_count, last_missed_at, last_outbound_at, last_successful_callback_at"
+      "id, phone_normalized, manager_bitrix_user_id, missed_count, last_missed_at, last_outbound_at, last_successful_callback_at"
     )
     .eq("status", "open")
     .order("last_missed_at", { ascending: true })
@@ -98,7 +98,8 @@ export async function processNoCallbackEscalations(
 
       const outboundBlock = await outboundActivityBlocksMissedPrepare(supabase, {
         phone_normalized: row.phone_normalized,
-        context: row.context
+        last_missed_at: row.last_missed_at,
+        manager_bitrix_user_id: row.manager_bitrix_user_id ?? null
       });
       if (outboundBlock) {
         skipped++;
