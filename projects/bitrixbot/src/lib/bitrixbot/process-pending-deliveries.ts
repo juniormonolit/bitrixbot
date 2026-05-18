@@ -1,10 +1,10 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { withTimeout } from "@/src/lib/bitrixbot/async-timeout";
-import { getAlertingSettings } from "@/src/lib/bitrixbot/get-alerting-settings";
-import { refreshPendingDeliveryMessagePhoneLine } from "@/src/lib/bitrixbot/re-enrich-case-deal";
-import { sendBitrixMessage } from "@/src/lib/bitrixbot/send-bitrix-message";
-import { outboundActivityBlocksMissedPrepare } from "@/src/lib/bitrixbot/alerting-prepare-outbound-guard";
-import { isValidAlertRecipientBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
+import { withTimeout } from "@/lib/bitrixbot/async-timeout";
+import { getAlertingSettings } from "@/lib/bitrixbot/get-alerting-settings";
+import { refreshPendingDeliveryMessagePhoneLine } from "@/lib/bitrixbot/re-enrich-case-deal";
+import { sendBitrixMessage } from "@/lib/bitrixbot/send-bitrix-message";
+import { outboundActivityBlocksMissedPrepare } from "@/lib/bitrixbot/alerting-prepare-outbound-guard";
+import { isValidAlertRecipientBitrixUserId } from "@/lib/bitrixbot/bitrix-user-id";
 
 type DeliveryRow = {
   id: string;

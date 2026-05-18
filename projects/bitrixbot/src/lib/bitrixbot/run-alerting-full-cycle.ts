@@ -1,20 +1,20 @@
-import { rebuildOrgResolvedHierarchy, type RebuildHierarchyResult } from "@/src/lib/bitrixbot/resolve-org-hierarchy";
+import { rebuildOrgResolvedHierarchy, type RebuildHierarchyResult } from "@/lib/bitrixbot/resolve-org-hierarchy";
 import {
   processNewMissedCallEvents,
   type ProcessNewMissedCallEventsSummary
-} from "@/src/lib/bitrixbot/process-new-missed-call-events";
+} from "@/lib/bitrixbot/process-new-missed-call-events";
 import {
   processOpenCasesForCallbackResolution,
   type CallbackResolutionSummary
-} from "@/src/lib/bitrixbot/process-open-cases-for-callback-resolution";
+} from "@/lib/bitrixbot/process-open-cases-for-callback-resolution";
 import {
   processNoCallbackEscalations,
   type NoCallbackEscalationsSummary
-} from "@/src/lib/bitrixbot/process-no-callback-escalations";
+} from "@/lib/bitrixbot/process-no-callback-escalations";
 import {
   processPendingDeliveries,
   type ProcessPendingDeliveriesSummary
-} from "@/src/lib/bitrixbot/process-pending-deliveries";
+} from "@/lib/bitrixbot/process-pending-deliveries";
 
 export type AlertingFullCycleStageOk<T> = { ok: true; durationMs: number; result: T };
 export type AlertingFullCycleStageErr = { ok: false; durationMs: number; error: string };

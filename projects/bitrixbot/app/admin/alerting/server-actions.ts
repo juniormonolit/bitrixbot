@@ -2,9 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { flagsForAlertingMode, flagsForStopAll, type AlertingModePreset } from "@/src/lib/bitrixbot/alerting-mode";
-import { MESSAGE_TEMPLATE_BODY_DEFAULTS } from "@/src/lib/bitrixbot/message-template-defaults";
-import { updateAlertingSettings } from "@/src/lib/bitrixbot/update-alerting-settings";
+import { flagsForAlertingMode, flagsForStopAll, type AlertingModePreset } from "@/lib/bitrixbot/alerting-mode";
+import { MESSAGE_TEMPLATE_BODY_DEFAULTS } from "@/lib/bitrixbot/message-template-defaults";
+import { updateAlertingSettings } from "@/lib/bitrixbot/update-alerting-settings";
 
 const MODE_PRESETS: AlertingModePreset[] = ["live", "live_with_mirror", "mirror_only"];
 

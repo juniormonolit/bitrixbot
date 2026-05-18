@@ -2,7 +2,7 @@ import { syncDepartments, syncEmployees } from "@/lib/bitrix/org";
 import {
   rebuildOrgResolvedHierarchy,
   type RebuildHierarchyResult
-} from "@/src/lib/bitrixbot/resolve-org-hierarchy";
+} from "@/lib/bitrixbot/resolve-org-hierarchy";
 
 export type SyncOrgStructureFromBitrixResult = {
   departmentsUpserted: number;

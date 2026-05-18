@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
-import { processOpenCasesForCallbackResolution } from "@/src/lib/bitrixbot/process-open-cases-for-callback-resolution";
+import { processOpenCasesForCallbackResolution } from "@/lib/bitrixbot/process-open-cases-for-callback-resolution";
 
 function isAuthorized(req: Request): boolean {
   const header = req.headers.get("x-debug-secret") ?? "";

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { chunkIdsForInFilter } from "@/src/lib/bitrixbot/supabase-in-filter-chunks";
+import { chunkIdsForInFilter } from "@/lib/bitrixbot/supabase-in-filter-chunks";
 
 function isAuthorized(req: Request): boolean {
   const header = req.headers.get("x-debug-secret") ?? "";

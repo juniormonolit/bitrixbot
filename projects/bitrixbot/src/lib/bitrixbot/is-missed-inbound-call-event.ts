@@ -1,7 +1,7 @@
 import {
   evaluateMissedInboundCustomerCall,
   type CallEventForInboundFilter
-} from "@/src/lib/bitrixbot/missed-inbound-customer-call";
+} from "@/lib/bitrixbot/missed-inbound-customer-call";
 
 type CallEventLike = CallEventForInboundFilter;
 
@@ -15,5 +15,5 @@ export {
   filterSkipReasonLabel,
   isActuallyMissedInboundCallEvent,
   isMissedInboundCustomerCall
-} from "@/src/lib/bitrixbot/missed-inbound-customer-call";
-export { callEventHasOutboundSignals, resolveCallTypeDigits } from "@/src/lib/bitrixbot/call-event-outbound";
+} from "@/lib/bitrixbot/missed-inbound-customer-call";
+export { callEventHasOutboundSignals, resolveCallTypeDigits } from "@/lib/bitrixbot/call-event-outbound";

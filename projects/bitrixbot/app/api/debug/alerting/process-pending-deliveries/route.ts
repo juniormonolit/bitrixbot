@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
-import { processPendingDeliveries } from "@/src/lib/bitrixbot/process-pending-deliveries";
+import { processPendingDeliveries } from "@/lib/bitrixbot/process-pending-deliveries";
 
 function isAuthorized(req: Request): boolean {
   const header = req.headers.get("x-debug-secret") ?? "";

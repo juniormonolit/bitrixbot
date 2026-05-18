@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { renderMessageTemplate } from "@/src/lib/bitrixbot/render-message-template";
-import type { AlertNotificationRuleRow } from "@/src/lib/bitrixbot/alert-notification-rule-engine";
+import { renderMessageTemplate } from "@/lib/bitrixbot/render-message-template";
+import type { AlertNotificationRuleRow } from "@/lib/bitrixbot/alert-notification-rule-engine";
 import {
   deleteAlertNotificationRuleAction,
   duplicateAlertNotificationRuleAction,

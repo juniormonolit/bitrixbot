@@ -1,4 +1,4 @@
-import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
+import { normalizeBitrixUserId } from "@/lib/bitrixbot/bitrix-user-id";
 
 type JsonObject = Record<string, unknown>;
 

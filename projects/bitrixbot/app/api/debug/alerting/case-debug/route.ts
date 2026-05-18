@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { loadCallEventsForCase } from "@/src/lib/bitrixbot/case-call-events";
-import { redactSecretsForDebug } from "@/src/lib/bitrixbot/redact-webhook-payload";
-import { normalizeStoredDealUrl } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
-import { explainMissedCallAlertRulesForCase } from "@/src/lib/bitrixbot/prepare-notifications-for-missed-call-case";
-import { voximplantPayloadSummary } from "@/src/lib/bitrixbot/voximplant-inbound-missed";
+import { loadCallEventsForCase } from "@/lib/bitrixbot/case-call-events";
+import { redactSecretsForDebug } from "@/lib/bitrixbot/redact-webhook-payload";
+import { normalizeStoredDealUrl } from "@/lib/bitrixbot/deal-enrichment-from-activity";
+import { explainMissedCallAlertRulesForCase } from "@/lib/bitrixbot/prepare-notifications-for-missed-call-case";
+import { voximplantPayloadSummary } from "@/lib/bitrixbot/voximplant-inbound-missed";
 
 function isAuthorized(req: Request): boolean {
   const header = req.headers.get("x-debug-secret") ?? "";

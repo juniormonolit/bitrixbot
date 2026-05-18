@@ -1,7 +1,7 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { selectNotificationRule, NotificationRuleRow } from "@/src/lib/bitrixbot/select-notification-rule";
-import { prepareNotificationsForMissedCallCase } from "@/src/lib/bitrixbot/prepare-notifications-for-missed-call-case";
-import { outboundActivityBlocksMissedPrepare } from "@/src/lib/bitrixbot/alerting-prepare-outbound-guard";
+import { selectNotificationRule, NotificationRuleRow } from "@/lib/bitrixbot/select-notification-rule";
+import { prepareNotificationsForMissedCallCase } from "@/lib/bitrixbot/prepare-notifications-for-missed-call-case";
+import { outboundActivityBlocksMissedPrepare } from "@/lib/bitrixbot/alerting-prepare-outbound-guard";
 
 type CaseRow = {
   id: string;

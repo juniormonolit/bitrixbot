@@ -1,10 +1,10 @@
 import { env } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { fetchAllByRange } from "@/src/lib/supabase/fetch-all-by-range";
-import { getAlertingDashboardSummary } from "@/src/lib/bitrixbot/alerting-dashboard";
-import { getCallEventManagerDiagnostics } from "@/src/lib/bitrixbot/call-event-manager-diagnostics";
-import { getAlertingSettings } from "@/src/lib/bitrixbot/get-alerting-settings";
-import type { AlertNotificationRuleRow } from "@/src/lib/bitrixbot/alert-notification-rule-engine";
+import { getAlertingDashboardSummary } from "@/lib/bitrixbot/alerting-dashboard";
+import { getCallEventManagerDiagnostics } from "@/lib/bitrixbot/call-event-manager-diagnostics";
+import { getAlertingSettings } from "@/lib/bitrixbot/get-alerting-settings";
+import type { AlertNotificationRuleRow } from "@/lib/bitrixbot/alert-notification-rule-engine";
 import {
   AlertingConsole,
   type AlertRulesReadiness,

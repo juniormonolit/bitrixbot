@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { isAlertingDebugRequestAuthorized } from "@/src/lib/bitrixbot/debug-request-secret";
-import { tryAcquireAlertingCycleLease, releaseAlertingCycleLease } from "@/src/lib/bitrixbot/alerting-cycle-lease";
-import { processNewMissedCallEvents } from "@/src/lib/bitrixbot/process-new-missed-call-events";
-import { processPendingDeliveries } from "@/src/lib/bitrixbot/process-pending-deliveries";
+import { isAlertingDebugRequestAuthorized } from "@/lib/bitrixbot/debug-request-secret";
+import { tryAcquireAlertingCycleLease, releaseAlertingCycleLease } from "@/lib/bitrixbot/alerting-cycle-lease";
+import { processNewMissedCallEvents } from "@/lib/bitrixbot/process-new-missed-call-events";
+import { processPendingDeliveries } from "@/lib/bitrixbot/process-pending-deliveries";
 
 const ROUTE_LOG = "[internal:run-alerting-cycle]";
 

@@ -1,7 +1,7 @@
-import { DEFAULT_MIRROR_BITRIX_USER_ID } from "@/src/lib/bitrixbot/alerting-constants";
-import type { AlertingSettings } from "@/src/lib/bitrixbot/get-alerting-settings";
+import { DEFAULT_MIRROR_BITRIX_USER_ID } from "@/lib/bitrixbot/alerting-constants";
+import type { AlertingSettings } from "@/lib/bitrixbot/get-alerting-settings";
 
-export { DEFAULT_MIRROR_BITRIX_USER_ID } from "@/src/lib/bitrixbot/alerting-constants";
+export { DEFAULT_MIRROR_BITRIX_USER_ID } from "@/lib/bitrixbot/alerting-constants";
 
 export type AlertingMode =
   | "live"
