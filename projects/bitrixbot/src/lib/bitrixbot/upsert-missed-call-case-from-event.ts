@@ -4,7 +4,8 @@ import {
   getCrmActivityIdForDealMapping,
   isActivityDealMappingConfigured,
   parseBitrixActivityIdForMapping,
-  resolveDealMapping
+  resolveDealMapping,
+  type ResolveDealMappingResult
 } from "@/src/lib/bitrixbot/activity-deal-mapping";
 import { evaluateDealMappingNotificationGate } from "@/src/lib/bitrixbot/missed-call-deal-notification-gate";
 import { extractCallContext } from "@/src/lib/bitrixbot/extract-call-context";
@@ -18,6 +19,41 @@ import { safeJsonTopKeys, safeNestedKeys } from "@/src/lib/bitrixbot/payload-dia
 import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
 
 const LOG = "[alerting:process-missed-calls]";
+
+function dealMappingCaseEnrichmentColumns(m: ResolveDealMappingResult): {
+  deal_enrichment_source: string;
+  deal_enrichment_confidence: number;
+  deal_enrichment_matched_activity_id: number | null;
+  deal_enrichment_matched_called_at: string | null;
+  deal_enrichment_matched_by_phone: boolean;
+  deal_enrichment_phone_manager_matched: boolean;
+} {
+  if (m.dealId == null || m.source == null || m.confidence == null) {
+    throw new Error("dealMappingCaseEnrichmentColumns: expected resolved mapping");
+  }
+  return {
+    deal_enrichment_source: m.source,
+    deal_enrichment_confidence: m.confidence,
+    deal_enrichment_matched_activity_id: m.matched_bitrix_activity_id,
+    deal_enrichment_matched_called_at: m.matched_called_at,
+    deal_enrichment_matched_by_phone: m.matched_by_phone ?? false,
+    deal_enrichment_phone_manager_matched: m.phone_manager_matched ?? false
+  };
+}
+
+function dealMappingContextSnapshot(m: ResolveDealMappingResult) {
+  return {
+    source: m.source,
+    confidence: m.confidence,
+    matched_bitrix_activity_id: m.matched_bitrix_activity_id,
+    matched_called_at: m.matched_called_at,
+    matched_by_phone: m.matched_by_phone,
+    phone_manager_matched: m.phone_manager_matched,
+    multiple_deals_by_phone: m.multiple_deals_by_phone,
+    fallback_days: m.fallback_days,
+    called_at_from: m.called_at_from
+  };
+}
 
 function supabaseErr(
   ctx: string,
@@ -297,25 +333,25 @@ export async function upsertMissedCallCaseFromEvent(
       activityRaw ?? (ce.crm_activity_id != null ? String(ce.crm_activity_id) : null);
 
     let resolvedDealId: number | null = null;
-    let mappingDealSource: "activity_id" | "phone" | null = null;
+    let mappingResult: ResolveDealMappingResult | null = null;
 
     if (mappingConfigured) {
       if (activityIdNum == null && (activityRaw ?? "").trim()) {
         console.warn(`${LOG} invalid_activity_id_for_mapping`, { crm_activity_id: activityRaw });
       }
-      const mappingResult = await resolveDealMapping({
+      mappingResult = await resolveDealMapping({
         activityIdNum,
         crm_activity_id: crmActivityLogForMapping,
         phone_normalized: ce.phone_normalized,
         manager_bitrix_user_id: ce.manager_bitrix_user_id
       });
       resolvedDealId = mappingResult.dealId;
-      mappingDealSource = mappingResult.source;
       if (resolvedDealId != null) {
         console.log(`${LOG} deal_resolved`, {
           activity_id: activityIdNum,
           deal_id: resolvedDealId,
-          source: mappingDealSource
+          source: mappingResult.source,
+          confidence: mappingResult.confidence
         });
       } else {
         console.warn(`${LOG} deal_mapping_unresolved`, {
@@ -362,6 +398,10 @@ export async function upsertMissedCallCaseFromEvent(
         error: null,
         dealMappingSkipReason: dealGate.reason
       };
+    }
+
+    if (!mappingResult) {
+      throw new Error("internal: mappingResult missing after deal mapping gate");
     }
 
     const ctx = extractCallContext(ce);
@@ -439,7 +479,7 @@ export async function upsertMissedCallCaseFromEvent(
       const { data: cur, error: curErr } = await supabase
         .from("missed_call_cases")
         .select(
-          "id, missed_count, last_missed_at, manager_bitrix_user_id, manager_name, contact_name, deal_id, deal_url, deal_title, deal_enriched_at, deal_enrichment_error, deal_enrichment_source"
+          "id, missed_count, last_missed_at, manager_bitrix_user_id, manager_name, contact_name, deal_id, deal_url, deal_title, deal_enriched_at, deal_enrichment_error, deal_enrichment_source, deal_enrichment_confidence, deal_enrichment_matched_activity_id, deal_enrichment_matched_called_at, deal_enrichment_matched_by_phone, deal_enrichment_phone_manager_matched"
         )
         .eq("id", caseId)
         .single();
@@ -457,6 +497,11 @@ export async function upsertMissedCallCaseFromEvent(
         deal_enriched_at: string | null;
         deal_enrichment_error: string | null;
         deal_enrichment_source: string | null;
+        deal_enrichment_confidence: number | null;
+        deal_enrichment_matched_activity_id: number | null;
+        deal_enrichment_matched_called_at: string | null;
+        deal_enrichment_matched_by_phone: boolean | null;
+        deal_enrichment_phone_manager_matched: boolean | null;
       };
 
       mark("missed_call_cases_streak_check", {
@@ -485,10 +530,7 @@ export async function upsertMissedCallCaseFromEvent(
               deal_title: current.deal_title,
               deal_enriched_at: new Date().toISOString(),
               deal_enrichment_error: null,
-              deal_enrichment_source:
-                mappingDealSource === "phone"
-                  ? "external_mapping_supabase_phone"
-                  : "external_mapping_supabase"
+              ...dealMappingCaseEnrichmentColumns(mappingResult)
             }
           : {
               deal_id: current.deal_id,
@@ -496,14 +538,20 @@ export async function upsertMissedCallCaseFromEvent(
               deal_title: current.deal_title,
               deal_enriched_at: current.deal_enriched_at,
               deal_enrichment_error: current.deal_enrichment_error,
-              deal_enrichment_source: current.deal_enrichment_source
+              deal_enrichment_source: current.deal_enrichment_source,
+              deal_enrichment_confidence: current.deal_enrichment_confidence,
+              deal_enrichment_matched_activity_id: current.deal_enrichment_matched_activity_id,
+              deal_enrichment_matched_called_at: current.deal_enrichment_matched_called_at,
+              deal_enrichment_matched_by_phone: current.deal_enrichment_matched_by_phone,
+              deal_enrichment_phone_manager_matched: current.deal_enrichment_phone_manager_matched
             }),
         contact_name: current.contact_name ?? ctx.contactName,
         context: {
           last_call_event_id: ce.id,
           last_bitrix_call_id: ce.bitrix_call_id,
           last_crm_activity_id: ce.crm_activity_id,
-          matching_strategy: "phone+manager+24h"
+          matching_strategy: "phone+manager+24h",
+          deal_mapping: dealMappingContextSnapshot(mappingResult)
         }
       };
 
@@ -524,14 +572,9 @@ export async function upsertMissedCallCaseFromEvent(
         deal_id: resolvedDealId,
         deal_url: resolvedDealId != null ? buildDealDetailsUrl(resolvedDealId) : null,
         deal_title: null as string | null,
-        deal_enriched_at: resolvedDealId != null ? new Date().toISOString() : null,
+        deal_enriched_at: new Date().toISOString(),
         deal_enrichment_error: null as string | null,
-        deal_enrichment_source:
-          resolvedDealId != null
-            ? mappingDealSource === "phone"
-              ? "external_mapping_supabase_phone"
-              : "external_mapping_supabase"
-            : null,
+        ...dealMappingCaseEnrichmentColumns(mappingResult),
         contact_name: ctx.contactName,
         manager_bitrix_user_id: ctx.managerBitrixUserId,
         manager_name: employeeInfo.managerName,
@@ -544,7 +587,8 @@ export async function upsertMissedCallCaseFromEvent(
           created_from_call_event_id: ce.id,
           bitrix_call_id: ce.bitrix_call_id,
           crm_activity_id: ce.crm_activity_id,
-          matching_strategy: "new_case"
+          matching_strategy: "new_case",
+          deal_mapping: dealMappingContextSnapshot(mappingResult)
         }
       };
 

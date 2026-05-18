@@ -3,6 +3,24 @@ import { extractVoximplantDataPayload } from "@/src/lib/bitrixbot/voximplant-inb
 
 const LOG = "[activity-deal-mapping]";
 const PHONE_FALLBACK_LIMIT = 200;
+const DEFAULT_MAPPING_PHONE_FALLBACK_DAYS = 90;
+
+/**
+ * Env `MAPPING_PHONE_FALLBACK_DAYS` — limit phone fallback rows to `called_at` within this many days.
+ * Invalid / missing → 90.
+ */
+export function parseMappingPhoneFallbackDays(): number {
+  const raw = process.env.MAPPING_PHONE_FALLBACK_DAYS;
+  if (raw == null || String(raw).trim() === "") return DEFAULT_MAPPING_PHONE_FALLBACK_DAYS;
+  const n = Number(String(raw).trim());
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) return DEFAULT_MAPPING_PHONE_FALLBACK_DAYS;
+  return n;
+}
+
+export function getMappingPhoneFallbackCalledAtFromIso(): string {
+  const days = parseMappingPhoneFallbackDays();
+  return new Date(Date.now() - days * 86_400_000).toISOString();
+}
 
 let _mappingClient: SupabaseClient | null | undefined;
 let _missingEnvWarned = false;
@@ -95,7 +113,8 @@ export type ActivityDealMappingConfig = {
 /**
  * Optional external Supabase with rows: `bitrix_activity_id` → `deal_id`.
  * Env: `MAPPING_SUPABASE_URL`, `MAPPING_SUPABASE_SERVICE_ROLE_KEY`,
- * optional `MAPPING_SUPABASE_SCHEMA` (default `public`), `MAPPING_SUPABASE_TABLE` (default `bitrix_activity_deals`).
+ * optional `MAPPING_SUPABASE_SCHEMA` (default `public`), `MAPPING_SUPABASE_TABLE` (default `bitrix_activity_deals`),
+ * optional `MAPPING_PHONE_FALLBACK_DAYS` (default `90`) — для phone fallback только строки с `called_at` не старше N дней.
  */
 export function getActivityDealMappingConfig(): ActivityDealMappingConfig | null {
   const url = (process.env.MAPPING_SUPABASE_URL ?? "").trim();
@@ -169,12 +188,91 @@ export type ResolveDealIdLogContext = {
   crm_activity_id?: string | null;
 };
 
+export type DealMappingResolutionSource = "activity_id" | "phone_manager" | "phone_only" | null;
+
+/** Normalized winning mapping row for logs / check script. */
+export type ResolvedDealMappingMatchedRow = {
+  bitrix_activity_id: number | null;
+  deal_id: number | null;
+  phone_number: string | null;
+  called_at: string | null;
+  manager_id: number | null;
+};
+
 export type ResolveDealMappingResult = {
   dealId: number | null;
-  source: "activity_id" | "phone" | null;
-  matched_bitrix_activity_id?: number | null;
-  matched_called_at?: string | null;
+  source: DealMappingResolutionSource;
+  confidence: number | null;
+  matched_bitrix_activity_id: number | null;
+  matched_called_at: string | null;
+  matched_by_phone: boolean | null;
+  phone_manager_matched: boolean | null;
+  multiple_deals_by_phone: boolean;
+  fallback_days: number;
+  called_at_from: string | null;
+  queryErrors: string[];
+  matched_row: ResolvedDealMappingMatchedRow | null;
 };
+
+function baseMappingMeta(): Pick<ResolveDealMappingResult, "fallback_days" | "called_at_from"> {
+  const fallback_days = parseMappingPhoneFallbackDays();
+  const called_at_from = new Date(Date.now() - fallback_days * 86_400_000).toISOString();
+  return { fallback_days, called_at_from };
+}
+
+function unresolvedMappingResult(
+  meta: Pick<ResolveDealMappingResult, "fallback_days" | "called_at_from">,
+  queryErrors: string[]
+): ResolveDealMappingResult {
+  return {
+    dealId: null,
+    source: null,
+    confidence: null,
+    matched_bitrix_activity_id: null,
+    matched_called_at: null,
+    matched_by_phone: null,
+    phone_manager_matched: null,
+    multiple_deals_by_phone: false,
+    ...meta,
+    queryErrors,
+    matched_row: null
+  };
+}
+
+function parseManagerIdFromMappingRow(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value === "number" && Number.isFinite(value) && Number.isInteger(value)) {
+    if (!Number.isSafeInteger(value)) return null;
+    return value;
+  }
+  if (typeof value === "bigint") {
+    const n = Number(value);
+    return Number.isSafeInteger(n) ? n : null;
+  }
+  if (typeof value === "string") {
+    const s = value.trim();
+    if (!/^\d{1,18}$/.test(s)) return null;
+    const n = Number(s);
+    return Number.isSafeInteger(n) ? n : null;
+  }
+  return null;
+}
+
+function toMatchedRow(r: {
+  bitrix_activity_id?: unknown;
+  deal_id?: unknown;
+  phone_number?: string | null;
+  called_at?: string | null;
+  manager_id?: unknown;
+}): ResolvedDealMappingMatchedRow {
+  return {
+    bitrix_activity_id: parseBitrixActivityIdForMapping(r.bitrix_activity_id),
+    deal_id: parseDealIdFromMappingRow(r.deal_id),
+    phone_number: r.phone_number ?? null,
+    called_at: r.called_at ?? null,
+    manager_id: parseManagerIdFromMappingRow(r.manager_id)
+  };
+}
 
 type MappingPhoneRow = {
   bitrix_activity_id?: unknown;
@@ -190,6 +288,7 @@ function filterRowsByNormalizedPhone(rows: MappingPhoneRow[], targetNormalized: 
 
 /**
  * Try activity_id, then phone history (newest `called_at` first), optional manager_id filter then without.
+ * Phone fallback is limited to rows with `called_at >= now - MAPPING_PHONE_FALLBACK_DAYS` (default 90).
  */
 export async function resolveDealMapping(input: {
   activityIdNum: number | null;
@@ -197,10 +296,13 @@ export async function resolveDealMapping(input: {
   phone_normalized?: string | null;
   manager_bitrix_user_id?: string | null;
 }): Promise<ResolveDealMappingResult> {
+  const meta = baseMappingMeta();
+  const queryErrors: string[] = [];
+
   const cfg = getActivityDealMappingConfig();
   const client = getMappingDbClient();
   if (!cfg || !client) {
-    return { dealId: null, source: null };
+    return unresolvedMappingResult(meta, queryErrors);
   }
 
   const mappingCfg: ActivityDealMappingConfig = cfg;
@@ -213,12 +315,14 @@ export async function resolveDealMapping(input: {
       normalizeCrmActivityIdForLookup(input.activityIdNum) ?? String(input.activityIdNum);
 
     const { data, error } = await fromMappingTable(dbClient, mappingCfg)
-      .select("deal_id")
+      .select("deal_id, bitrix_activity_id, called_at")
       .eq("bitrix_activity_id", normalizedLookupId)
       .limit(2);
 
     let foundDealId: number | null = null;
+    let firstRow: { deal_id?: unknown; bitrix_activity_id?: unknown; called_at?: string | null } | null = null;
     if (error) {
+      queryErrors.push(`activity_lookup: ${error.message}`);
       console.error(`${LOG} query_failed`, {
         activity_id: input.activityIdNum,
         crm_activity_id: crmLog,
@@ -227,7 +331,11 @@ export async function resolveDealMapping(input: {
         message: error.message
       });
     } else {
-      const rows = (data ?? []) as Array<{ deal_id?: unknown }>;
+      const rows = (data ?? []) as Array<{
+        deal_id?: unknown;
+        bitrix_activity_id?: unknown;
+        called_at?: string | null;
+      }>;
       if (rows.length > 1) {
         console.warn(`${LOG} multiple_rows_using_first`, {
           activity_id: input.activityIdNum,
@@ -235,7 +343,8 @@ export async function resolveDealMapping(input: {
         });
       }
       if (rows.length > 0) {
-        foundDealId = parseDealIdFromMappingRow(rows[0]?.deal_id);
+        firstRow = rows[0] ?? null;
+        foundDealId = parseDealIdFromMappingRow(firstRow?.deal_id);
       }
     }
 
@@ -250,14 +359,32 @@ export async function resolveDealMapping(input: {
       query_error: error ? error.message : null
     });
 
-    if (foundDealId != null) {
-      return { dealId: foundDealId, source: "activity_id" };
+    if (foundDealId != null && firstRow) {
+      const matchedRow = toMatchedRow({
+        ...firstRow,
+        phone_number: null,
+        manager_id: null
+      });
+      return {
+        dealId: foundDealId,
+        source: "activity_id",
+        confidence: 1.0,
+        matched_bitrix_activity_id:
+          matchedRow.bitrix_activity_id ?? parseBitrixActivityIdForMapping(input.activityIdNum),
+        matched_called_at: matchedRow.called_at,
+        matched_by_phone: false,
+        phone_manager_matched: false,
+        multiple_deals_by_phone: false,
+        ...meta,
+        queryErrors,
+        matched_row: matchedRow
+      };
     }
   }
 
   const targetPhone = normalizePhoneForMappingLookup(input.phone_normalized);
   if (!targetPhone) {
-    return { dealId: null, source: null };
+    return unresolvedMappingResult(meta, queryErrors);
   }
 
   const mgr = parseManagerIdForMappingFilter(input.manager_bitrix_user_id);
@@ -269,6 +396,7 @@ export async function resolveDealMapping(input: {
     let q = fromMappingTable(dbClient, mappingCfg)
       .select("bitrix_activity_id, deal_id, manager_id, phone_number, called_at")
       .not("phone_number", "is", null)
+      .gte("called_at", meta.called_at_from)
       .order("called_at", { ascending: false })
       .limit(PHONE_FALLBACK_LIMIT);
 
@@ -283,25 +411,16 @@ export async function resolveDealMapping(input: {
     return { rows: (data ?? []) as MappingPhoneRow[], errorMsg: null };
   }
 
-  let queryError: string | null = null;
   let managerPassOkNoPhoneMatch = false;
 
   if (mgr != null) {
     const r1 = await runPhoneQuery(true);
     if (r1.errorMsg) {
-      queryError = r1.errorMsg;
+      queryErrors.push(`phone_fallback_manager: ${r1.errorMsg}`);
     } else {
       const m1 = filterRowsByNormalizedPhone(r1.rows, targetPhone);
       if (m1.length > 0) {
-        return finalizePhoneFallback(
-          input,
-          mappingCfg,
-          targetPhone,
-          r1.rows,
-          m1,
-          true,
-          null
-        );
+        return finalizePhoneFallback(input, targetPhone, r1.rows, m1, true, meta, queryErrors);
       }
       managerPassOkNoPhoneMatch = true;
     }
@@ -309,7 +428,7 @@ export async function resolveDealMapping(input: {
 
   const r2 = await runPhoneQuery(false);
   if (r2.errorMsg) {
-    queryError = queryError ?? r2.errorMsg;
+    queryErrors.push(`phone_fallback: ${r2.errorMsg}`);
   }
 
   const candidates = r2.rows;
@@ -319,7 +438,7 @@ export async function resolveDealMapping(input: {
     matches.length > 0 &&
     mgr != null &&
     managerPassOkNoPhoneMatch &&
-    queryError == null
+    r2.errorMsg == null
   ) {
     console.warn(`${LOG} activity_mapping_phone_fallback_without_manager_match`, {
       phone_normalized: targetPhone,
@@ -327,15 +446,7 @@ export async function resolveDealMapping(input: {
     });
   }
 
-  return finalizePhoneFallback(
-    input,
-    mappingCfg,
-    targetPhone,
-    candidates,
-    matches,
-    false,
-    r2.errorMsg
-  );
+  return finalizePhoneFallback(input, targetPhone, candidates, matches, false, meta, queryErrors);
 }
 
 function finalizePhoneFallback(
@@ -343,19 +454,22 @@ function finalizePhoneFallback(
     crm_activity_id?: string | null;
     manager_bitrix_user_id?: string | null;
   },
-  cfg: ActivityDealMappingConfig,
   targetPhone: string,
   candidates: MappingPhoneRow[],
   matches: MappingPhoneRow[],
   managerFilterUsed: boolean,
-  queryError: string | null
+  meta: Pick<ResolveDealMappingResult, "fallback_days" | "called_at_from">,
+  priorQueryErrors: string[]
 ): ResolveDealMappingResult {
   const crmLog = input.crm_activity_id ?? null;
+  const queryErrors = [...priorQueryErrors];
 
   const matchedCount = matches.length;
   let foundDealId: number | null = null;
   let matchedActivityId: number | null = null;
   let matchedAt: string | null = null;
+  let winner: MappingPhoneRow | null = null;
+  let multipleDeals = false;
 
   if (matchedCount > 0) {
     const sorted = [...matches].sort((a, b) => {
@@ -369,7 +483,8 @@ function finalizePhoneFallback(
       const d = parseDealIdFromMappingRow(m.deal_id);
       if (d != null) dealIds.add(d);
     }
-    if (dealIds.size > 1) {
+    multipleDeals = dealIds.size > 1;
+    if (multipleDeals) {
       console.warn(`${LOG} activity_mapping_phone_multiple_deals`, {
         phone_normalized: targetPhone,
         deal_ids: [...dealIds],
@@ -377,14 +492,19 @@ function finalizePhoneFallback(
       });
     }
 
-    const winner = sorted[0];
+    winner = sorted[0] ?? null;
     foundDealId = parseDealIdFromMappingRow(winner?.deal_id);
     matchedActivityId = parseBitrixActivityIdForMapping(winner?.bitrix_activity_id);
     matchedAt = winner?.called_at ?? null;
   }
 
+  const confidence =
+    foundDealId == null ? null : multipleDeals ? 0.3 : managerFilterUsed ? 0.9 : 0.6;
+  const source: "phone_manager" | "phone_only" | null =
+    foundDealId == null ? null : managerFilterUsed ? "phone_manager" : "phone_only";
+
   console.log(`${LOG} activity_mapping_phone_fallback`, {
-    source: "phone" as const,
+    source: source ?? "phone_unresolved",
     crm_activity_id: crmLog,
     phone_normalized: targetPhone,
     manager_bitrix_user_id: input.manager_bitrix_user_id ?? null,
@@ -394,17 +514,30 @@ function finalizePhoneFallback(
     matched_bitrix_activity_id: matchedActivityId,
     matched_called_at: matchedAt,
     manager_filter_used: managerFilterUsed,
-    query_error: queryError
+    confidence,
+    multiple_deals_by_phone: multipleDeals,
+    fallback_days: meta.fallback_days,
+    called_at_from: meta.called_at_from,
+    query_errors: queryErrors
   });
 
   if (foundDealId == null) {
-    return { dealId: null, source: null };
+    return unresolvedMappingResult(meta, queryErrors);
   }
+
+  const matched_row = winner ? toMatchedRow(winner) : null;
   return {
     dealId: foundDealId,
-    source: "phone",
+    source,
+    confidence,
     matched_bitrix_activity_id: matchedActivityId,
-    matched_called_at: matchedAt
+    matched_called_at: matchedAt,
+    matched_by_phone: true,
+    phone_manager_matched: managerFilterUsed,
+    multiple_deals_by_phone: multipleDeals,
+    ...meta,
+    queryErrors,
+    matched_row
   };
 }
 

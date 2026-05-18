@@ -33,7 +33,7 @@ export async function GET(req: Request) {
   const { data: caseRow, error: caseErr } = await supabase
     .from("missed_call_cases")
     .select(
-      "id, phone_normalized, deal_id, deal_url, deal_title, deal_enriched_at, deal_enrichment_error, deal_enrichment_source, manager_bitrix_user_id, manager_name, context"
+      "id, phone_normalized, deal_id, deal_url, deal_title, deal_enriched_at, deal_enrichment_error, deal_enrichment_source, deal_enrichment_confidence, deal_enrichment_matched_activity_id, deal_enrichment_matched_called_at, deal_enrichment_matched_by_phone, deal_enrichment_phone_manager_matched, manager_bitrix_user_id, manager_name, context"
     )
     .eq("id", caseId)
     .maybeSingle();
@@ -54,6 +54,11 @@ export async function GET(req: Request) {
     deal_enriched_at: string | null;
     deal_enrichment_error: string | null;
     deal_enrichment_source: string | null;
+    deal_enrichment_confidence: number | null;
+    deal_enrichment_matched_activity_id: number | null;
+    deal_enrichment_matched_called_at: string | null;
+    deal_enrichment_matched_by_phone: boolean | null;
+    deal_enrichment_phone_manager_matched: boolean | null;
     manager_bitrix_user_id: string | null;
     manager_name: string | null;
     context: unknown;
@@ -122,7 +127,12 @@ export async function GET(req: Request) {
       deal_title: c.deal_title,
       deal_enriched_at: c.deal_enriched_at,
       deal_enrichment_error: c.deal_enrichment_error,
-      deal_enrichment_source: c.deal_enrichment_source
+      deal_enrichment_source: c.deal_enrichment_source,
+      deal_enrichment_confidence: c.deal_enrichment_confidence,
+      deal_enrichment_matched_activity_id: c.deal_enrichment_matched_activity_id,
+      deal_enrichment_matched_called_at: c.deal_enrichment_matched_called_at,
+      deal_enrichment_matched_by_phone: c.deal_enrichment_matched_by_phone,
+      deal_enrichment_phone_manager_matched: c.deal_enrichment_phone_manager_matched
     },
     callEvents,
     deliveries: deliveryRows.map((d) => {
