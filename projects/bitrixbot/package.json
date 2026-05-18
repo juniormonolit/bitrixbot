@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "check:activity-mapping": "npx tsx scripts/check-activity-deal-mapping.ts"
+    "check:activity-mapping": "npx tsx scripts/check-activity-deal-mapping.ts",
+    "verify:deal-notification-guard": "npx tsx scripts/verify-deal-notification-guard.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",

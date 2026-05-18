@@ -430,6 +430,10 @@ export async function processNewMissedCallEvents(
         const b = bucketSkipReason(res.filterSkipReason);
         skippedReasons[b] = (skippedReasons[b] ?? 0) + 1;
       }
+      if (res.dealMappingSkipReason) {
+        skippedReasons[res.dealMappingSkipReason] = (skippedReasons[res.dealMappingSkipReason] ?? 0) + 1;
+        warnings.push(`deal_mapping_skip:${res.dealMappingSkipReason}:${ev.id}`);
+      }
       warnings.push(...res.warnings);
     } else if (res.status === "noop") {
       warnings.push(...res.warnings);

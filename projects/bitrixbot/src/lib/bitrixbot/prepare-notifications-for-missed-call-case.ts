@@ -237,6 +237,21 @@ export async function prepareNotificationsForMissedCallCase(
     };
   }
 
+  if (typedCase.deal_id == null) {
+    warnings.push("prepare_skipped_missing_deal_id");
+    console.log(`${LOG} skipped_missing_deal_id`, { caseId: typedCase.id });
+    return {
+      caseId: typedCase.id,
+      selectedRuleId: null,
+      createdDeliveriesCount: 0,
+      skippedExistingDeliveries: 0,
+      skippedRecipients: [],
+      warnings,
+      managerRecipientFallbackUsed: false,
+      ...(wantRuleDebug ? { ruleEvaluationDebug: [] } : {})
+    };
+  }
+
   if (!isValidAlertRecipientBitrixUserId(typedCase.manager_bitrix_user_id)) {
     warnings.push("prepare_skipped_invalid_case_manager_bitrix_user_id");
     skippedRecipients.push({ role: "case", reason: "skipped_invalid_case_manager_id" });
@@ -603,6 +618,16 @@ export async function explainMissedCallAlertRulesForCase(
       skipReason: "case_not_open",
       evaluations,
       warnings: [...warnings, "prepare_skipped_case_not_open"]
+    };
+  }
+
+  if (typedCase.deal_id == null) {
+    return {
+      caseId: typedCase.id,
+      skipped: true,
+      skipReason: "prepare_skipped_missing_deal_id",
+      evaluations,
+      warnings: [...warnings, "prepare_skipped_missing_deal_id"]
     };
   }
 

@@ -6,6 +6,7 @@ import {
   parseBitrixActivityIdForMapping,
   resolveDealIdByActivityId
 } from "@/src/lib/bitrixbot/activity-deal-mapping";
+import { evaluateDealMappingNotificationGate } from "@/src/lib/bitrixbot/missed-call-deal-notification-gate";
 import { extractCallContext } from "@/src/lib/bitrixbot/extract-call-context";
 import {
   evaluateMissedInboundCustomerCall,
@@ -63,6 +64,8 @@ export type UpsertMissedCallCaseResult = {
   error: string | null;
   /** Причина раннего skip по фильтру входящих пропущенных (для агрегата skippedReasons). */
   filterSkipReason?: string | null;
+  /** Skip: нет внешнего deal mapping или deal не найден — уведомления не создаём. */
+  dealMappingSkipReason?: "deal_mapping_disabled" | "deal_mapping_not_found";
   /** Одно событие без сотрудника в таблице employees — для агрегата в process-new. */
   employeeNotFoundHit?: {
     managerBitrixUserId: string | null;
@@ -289,16 +292,56 @@ export async function upsertMissedCallCaseFromEvent(
       manager_id: ce.manager_bitrix_user_id
     });
 
+    const mappingConfigured = isActivityDealMappingConfigured();
     let resolvedDealId: number | null = null;
-    if (activityIdNum != null) {
+    if (mappingConfigured && activityIdNum != null) {
       resolvedDealId = await resolveDealIdByActivityId(activityIdNum);
       if (resolvedDealId != null) {
         console.log(`${LOG} deal_resolved`, { activity_id: activityIdNum, deal_id: resolvedDealId });
-      } else if (isActivityDealMappingConfigured()) {
-        console.warn(`${LOG} deal_mapping_not_found`, { activity_id: activityIdNum });
+      } else {
+        console.warn(`${LOG} deal_mapping_row_missing`, { activity_id: activityIdNum });
       }
-    } else if ((activityRaw ?? "").trim()) {
+    } else if (!mappingConfigured && activityIdNum != null) {
+      console.warn(`${LOG} deal_mapping_env_missing_skip_lookup`, { activity_id: activityIdNum });
+    } else if ((activityRaw ?? "").trim() && activityIdNum == null) {
       console.warn(`${LOG} invalid_activity_id_for_mapping`, { crm_activity_id: activityRaw });
+    }
+
+    const dealGate = evaluateDealMappingNotificationGate({
+      mappingConfigured,
+      activityIdNum,
+      resolvedDealId
+    });
+    if (dealGate.block) {
+      const crmActivityLog = (activityRaw ?? ce.crm_activity_id ?? "").trim() || null;
+      const skipPayload = {
+        call_event_id: ce.id,
+        crm_activity_id: crmActivityLog,
+        manager_bitrix_user_id: ce.manager_bitrix_user_id,
+        phone_normalized: ce.phone_normalized
+      };
+      if (dealGate.reason === "deal_mapping_disabled") {
+        console.warn(`${LOG} deal_mapping_disabled_skip_notification`, skipPayload);
+      } else {
+        console.warn(`${LOG} deal_mapping_not_found_skip_notification`, skipPayload);
+      }
+      await markProcessing(supabase, processing.id, {
+        processing_status: "skipped",
+        processed_at: new Date().toISOString(),
+        error_message: dealGate.reason,
+        processing_attempts: attempts
+      });
+      return {
+        callEventId,
+        status: "skipped",
+        caseId: null,
+        createdCase: false,
+        updatedCase: false,
+        createdDeliveries: 0,
+        warnings,
+        error: null,
+        dealMappingSkipReason: dealGate.reason
+      };
     }
 
     const ctx = extractCallContext(ce);
