@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/lib/bitrixbot/*": ["./src/lib/bitrixbot/*"],
+      "@/*": ["./*"]
+    }
+  },
+  "exclude": ["node_modules"]
+}
