@@ -14,6 +14,7 @@ import type { AlertNotificationRuleRow } from "@/src/lib/bitrixbot/alert-notific
 import { ManualActions } from "./manual-actions";
 import { OrgHierarchyBrowser } from "./org-hierarchy-browser";
 import { NotificationRulesPanel } from "./notification-rules-panel";
+import { StatisticsPanel } from "./statistics-panel";
 import {
   applyAlertingModeAction,
   resetMessageTemplateByCodeAction,
@@ -78,7 +79,7 @@ export type OrgStructureSnapshot = {
   hierarchyStats: OrgHierarchyStats;
 };
 
-type TabId = "mode" | "rules" | "logs" | "org";
+type TabId = "mode" | "rules" | "logs" | "org" | "statistics";
 
 const PENDING_DELIVERIES_WARN_THRESHOLD = 200;
 
@@ -284,6 +285,9 @@ export function AlertingConsole(props: {
         </TabButton>
         <TabButton active={tab === "org"} onClick={() => setTab("org")}>
           Структура компании
+        </TabButton>
+        <TabButton active={tab === "statistics"} onClick={() => setTab("statistics")}>
+          Статистика
         </TabButton>
       </nav>
 
@@ -684,6 +688,18 @@ export function AlertingConsole(props: {
               </div>
             </Card>
           </div>
+        </div>
+      ) : null}
+
+      {tab === "statistics" ? (
+        <div className="flex flex-col gap-4">
+          <Card title="Статистика по менеджерам">
+            <p className="mb-4 text-xs text-white/55">
+              Кейсы в периоде отбираются по <code className="text-white/70">last_missed_at</code>. Открытые и самый
+              долгий кейс — снимок на момент запроса.
+            </p>
+            <StatisticsPanel secret={props.secret} />
+          </Card>
         </div>
       ) : null}
 
