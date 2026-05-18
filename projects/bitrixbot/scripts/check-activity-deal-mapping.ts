@@ -2,10 +2,11 @@
  * Dev check for activity → deal mapping (external Supabase).
  *
  * Usage:
- *   npx tsx scripts/check-activity-deal-mapping.ts
- *   npx tsx scripts/check-activity-deal-mapping.ts --activity 12345
+ *   npm run check:activity-mapping -- --activity 2251176
+ *   npm run check:activity-mapping -- --phone 79669934409 --manager 8
+ *   npm run check:activity-mapping -- --activity 2251176 --phone 79669934409 --manager 8
  *
- * Env (optional for live resolve test):
+ * Env:
  *   MAPPING_SUPABASE_URL, MAPPING_SUPABASE_SERVICE_ROLE_KEY,
  *   MAPPING_SUPABASE_SCHEMA (default public), MAPPING_SUPABASE_TABLE
  */
@@ -16,7 +17,8 @@ import {
   getCrmActivityIdForDealMapping,
   isActivityDealMappingConfigured,
   parseBitrixActivityIdForMapping,
-  resolveDealIdByActivityId
+  resolveDealIdByActivityId,
+  resolveDealMapping
 } from "../src/lib/bitrixbot/activity-deal-mapping";
 
 function argNum(name: string): number | null {
@@ -24,6 +26,13 @@ function argNum(name: string): number | null {
   if (i === -1 || i + 1 >= process.argv.length) return null;
   const n = Number(process.argv[i + 1]);
   return Number.isFinite(n) ? n : null;
+}
+
+function argStr(name: string): string | null {
+  const i = process.argv.indexOf(name);
+  if (i === -1 || i + 1 >= process.argv.length) return null;
+  const v = process.argv[i + 1]?.trim();
+  return v ? v : null;
 }
 
 async function main() {
@@ -57,26 +66,63 @@ async function main() {
   console.log("isActivityDealMappingConfigured:", configured);
   const cfgPreview = getActivityDealMappingConfig();
   if (cfgPreview != null) {
-    console.log("mapping resolved →", { schema: cfgPreview.schema, table: cfgPreview.table });
+    console.log("MAPPING resolved →", {
+      schema: cfgPreview.schema,
+      table: cfgPreview.table
+    });
   }
 
-  let act = argNum("--activity");
-  if (act == null && configured) {
-    act = 2251176;
-    console.log("\n--- live resolve default activity 2251176 (--activity <id> to override) ---");
+  const act = argNum("--activity");
+  const phoneRaw = argStr("--phone");
+  const managerRaw = argStr("--manager");
+
+  let activityIdNum: number | null = act;
+  if (activityIdNum == null && phoneRaw == null && managerRaw == null && configured) {
+    activityIdNum = 2251176;
+    console.log("\n(default --activity 2251176 — pass flags to override)\n");
   }
-  if (act != null) {
-    console.log(`\n--- resolveDealIdByActivityId(${act}) ---`);
-    const deal = await resolveDealIdByActivityId(act, { crm_activity_id: String(act) });
-    console.log("deal_id:", deal);
-  } else {
+
+  const crmStr =
+    activityIdNum != null ? String(activityIdNum) : act != null ? String(act) : null;
+
+  if (activityIdNum != null || phoneRaw != null || managerRaw != null) {
+    console.log("\n--- resolveDealMapping ---", {
+      activityIdNum,
+      phone: phoneRaw ?? null,
+      manager: managerRaw ?? null
+    });
+    if (configured) {
+      const full = await resolveDealMapping({
+        activityIdNum,
+        crm_activity_id: crmStr,
+        phone_normalized: phoneRaw,
+        manager_bitrix_user_id: managerRaw
+      });
+      console.log("result deal_id:", full.dealId);
+      console.log("source:", full.source ?? null);
+      if (full.source === "phone") {
+        console.log("matched row:", {
+          bitrix_activity_id: full.matched_bitrix_activity_id ?? null,
+          called_at: full.matched_called_at ?? null
+        });
+      }
+    } else {
+      console.log("(mapping env missing)");
+    }
+  } else if (!configured) {
     console.log("\n(mapping env missing — set MAPPING_SUPABASE_* to test live lookup)");
   }
 
+  if (activityIdNum != null && configured && phoneRaw == null && managerRaw == null) {
+    console.log("\n--- resolveDealIdByActivityId (activity-only legacy) ---");
+    const dealOnly = await resolveDealIdByActivityId(activityIdNum, { crm_activity_id: crmStr });
+    console.log("deal_id:", dealOnly);
+  }
+
   console.log("\n--- env missing scenario (reset + no MAPPING_* ) ---");
-  /** Re-enables the one-shot warning after `__resetActivityDealMappingModuleForDev()`. */
   const savedUrl = process.env.MAPPING_SUPABASE_URL;
   const savedKey = process.env.MAPPING_SUPABASE_SERVICE_ROLE_KEY;
+  const savedSchema = process.env.MAPPING_SUPABASE_SCHEMA;
   delete process.env.MAPPING_SUPABASE_URL;
   delete process.env.MAPPING_SUPABASE_SERVICE_ROLE_KEY;
   __resetActivityDealMappingModuleForDev();
@@ -84,6 +130,7 @@ async function main() {
   console.log("resolve with env cleared ->", missingDeal, "(expect null)");
   process.env.MAPPING_SUPABASE_URL = savedUrl;
   process.env.MAPPING_SUPABASE_SERVICE_ROLE_KEY = savedKey;
+  if (savedSchema !== undefined) process.env.MAPPING_SUPABASE_SCHEMA = savedSchema;
 }
 
 main().catch((e) => {

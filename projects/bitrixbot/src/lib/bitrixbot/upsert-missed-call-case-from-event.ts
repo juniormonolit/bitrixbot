@@ -4,7 +4,7 @@ import {
   getCrmActivityIdForDealMapping,
   isActivityDealMappingConfigured,
   parseBitrixActivityIdForMapping,
-  resolveDealIdByActivityId
+  resolveDealMapping
 } from "@/src/lib/bitrixbot/activity-deal-mapping";
 import { evaluateDealMappingNotificationGate } from "@/src/lib/bitrixbot/missed-call-deal-notification-gate";
 import { extractCallContext } from "@/src/lib/bitrixbot/extract-call-context";
@@ -293,26 +293,42 @@ export async function upsertMissedCallCaseFromEvent(
     });
 
     const mappingConfigured = isActivityDealMappingConfigured();
+    const crmActivityLogForMapping =
+      activityRaw ?? (ce.crm_activity_id != null ? String(ce.crm_activity_id) : null);
+
     let resolvedDealId: number | null = null;
-    if (mappingConfigured && activityIdNum != null) {
-      resolvedDealId = await resolveDealIdByActivityId(activityIdNum, {
-        crm_activity_id:
-          activityRaw ?? (ce.crm_activity_id != null ? String(ce.crm_activity_id) : null)
-      });
-      if (resolvedDealId != null) {
-        console.log(`${LOG} deal_resolved`, { activity_id: activityIdNum, deal_id: resolvedDealId });
-      } else {
-        console.warn(`${LOG} deal_mapping_row_missing`, { activity_id: activityIdNum });
+    let mappingDealSource: "activity_id" | "phone" | null = null;
+
+    if (mappingConfigured) {
+      if (activityIdNum == null && (activityRaw ?? "").trim()) {
+        console.warn(`${LOG} invalid_activity_id_for_mapping`, { crm_activity_id: activityRaw });
       }
-    } else if (!mappingConfigured && activityIdNum != null) {
+      const mappingResult = await resolveDealMapping({
+        activityIdNum,
+        crm_activity_id: crmActivityLogForMapping,
+        phone_normalized: ce.phone_normalized,
+        manager_bitrix_user_id: ce.manager_bitrix_user_id
+      });
+      resolvedDealId = mappingResult.dealId;
+      mappingDealSource = mappingResult.source;
+      if (resolvedDealId != null) {
+        console.log(`${LOG} deal_resolved`, {
+          activity_id: activityIdNum,
+          deal_id: resolvedDealId,
+          source: mappingDealSource
+        });
+      } else {
+        console.warn(`${LOG} deal_mapping_unresolved`, {
+          activity_id: activityIdNum,
+          has_phone: Boolean(ce.phone_normalized?.trim())
+        });
+      }
+    } else if (activityIdNum != null) {
       console.warn(`${LOG} deal_mapping_env_missing_skip_lookup`, { activity_id: activityIdNum });
-    } else if ((activityRaw ?? "").trim() && activityIdNum == null) {
-      console.warn(`${LOG} invalid_activity_id_for_mapping`, { crm_activity_id: activityRaw });
     }
 
     const dealGate = evaluateDealMappingNotificationGate({
       mappingConfigured,
-      activityIdNum,
       resolvedDealId
     });
     if (dealGate.block) {
@@ -469,7 +485,10 @@ export async function upsertMissedCallCaseFromEvent(
               deal_title: current.deal_title,
               deal_enriched_at: new Date().toISOString(),
               deal_enrichment_error: null,
-              deal_enrichment_source: "external_mapping_supabase"
+              deal_enrichment_source:
+                mappingDealSource === "phone"
+                  ? "external_mapping_supabase_phone"
+                  : "external_mapping_supabase"
             }
           : {
               deal_id: current.deal_id,
@@ -507,7 +526,12 @@ export async function upsertMissedCallCaseFromEvent(
         deal_title: null as string | null,
         deal_enriched_at: resolvedDealId != null ? new Date().toISOString() : null,
         deal_enrichment_error: null as string | null,
-        deal_enrichment_source: resolvedDealId != null ? "external_mapping_supabase" : null,
+        deal_enrichment_source:
+          resolvedDealId != null
+            ? mappingDealSource === "phone"
+              ? "external_mapping_supabase_phone"
+              : "external_mapping_supabase"
+            : null,
         contact_name: ctx.contactName,
         manager_bitrix_user_id: ctx.managerBitrixUserId,
         manager_name: employeeInfo.managerName,

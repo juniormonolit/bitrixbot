@@ -8,7 +8,6 @@ import { evaluateDealMappingNotificationGate } from "../src/lib/bitrixbot/missed
 assert.deepEqual(
   evaluateDealMappingNotificationGate({
     mappingConfigured: true,
-    activityIdNum: 100,
     resolvedDealId: 555
   }),
   { block: false }
@@ -17,7 +16,6 @@ assert.deepEqual(
 assert.deepEqual(
   evaluateDealMappingNotificationGate({
     mappingConfigured: false,
-    activityIdNum: 100,
     resolvedDealId: null
   }),
   { block: true, reason: "deal_mapping_disabled" }
@@ -26,16 +24,6 @@ assert.deepEqual(
 assert.deepEqual(
   evaluateDealMappingNotificationGate({
     mappingConfigured: true,
-    activityIdNum: null,
-    resolvedDealId: null
-  }),
-  { block: true, reason: "deal_mapping_not_found" }
-);
-
-assert.deepEqual(
-  evaluateDealMappingNotificationGate({
-    mappingConfigured: true,
-    activityIdNum: 100,
     resolvedDealId: null
   }),
   { block: true, reason: "deal_mapping_not_found" }
