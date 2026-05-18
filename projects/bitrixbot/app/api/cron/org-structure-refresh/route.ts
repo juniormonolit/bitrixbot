@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
-import { getAlertingSettings } from "@/lib/bitrixbot/get-alerting-settings";
-import { syncOrgStructureFromBitrixAndRebuild } from "@/lib/bitrixbot/sync-org-structure-from-bitrix";
+import { getAlertingSettings } from "@/src/lib/bitrixbot/get-alerting-settings";
+import { syncOrgStructureFromBitrixAndRebuild } from "@/src/lib/bitrixbot/sync-org-structure-from-bitrix";
 
 /**
  * Ежедневное автообновление структуры (Vercel Cron → см. vercel.json).

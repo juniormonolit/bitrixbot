@@ -1,6 +1,6 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { fetchAllByRange } from "@/src/lib/supabase/fetch-all-by-range";
-import { normalizeBitrixUserId, bitrixUserIdLookupCandidates } from "@/lib/bitrixbot/bitrix-user-id";
+import { normalizeBitrixUserId, bitrixUserIdLookupCandidates } from "@/src/lib/bitrixbot/bitrix-user-id";
 
 type DepartmentRow = {
   id: string; // uuid

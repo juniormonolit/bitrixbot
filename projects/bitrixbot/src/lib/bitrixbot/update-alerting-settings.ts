@@ -1,5 +1,5 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { AlertingSettings, getAlertingSettings } from "@/lib/bitrixbot/get-alerting-settings";
+import { AlertingSettings, getAlertingSettings } from "@/src/lib/bitrixbot/get-alerting-settings";
 
 export type UpdateAlertingSettingsInput = Partial<{
   sending_enabled: boolean | string | null;

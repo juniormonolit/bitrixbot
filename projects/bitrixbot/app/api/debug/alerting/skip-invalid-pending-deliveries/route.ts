@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { skipInvalidPendingDeliveries } from "@/lib/bitrixbot/skip-invalid-pending-deliveries";
+import { skipInvalidPendingDeliveries } from "@/src/lib/bitrixbot/skip-invalid-pending-deliveries";
 
 const ROUTE_LOG = "[alerting:skip-invalid-pending-deliveries:route]";
 

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { syncDepartments } from "@/lib/bitrix/org";
-import { isAlertingDebugRequestAuthorized } from "@/lib/bitrixbot/debug-request-secret";
+import { isAlertingDebugRequestAuthorized } from "@/src/lib/bitrixbot/debug-request-secret";
 
 const LOG = "[sync-org-debug] sync-departments";
 const TIMEOUT_MS = 60_000;

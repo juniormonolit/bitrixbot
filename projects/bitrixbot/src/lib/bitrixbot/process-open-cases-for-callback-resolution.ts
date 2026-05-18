@@ -1,5 +1,5 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { resolveMissedCallCaseByCallback } from "@/lib/bitrixbot/resolve-missed-call-case-by-callback";
+import { resolveMissedCallCaseByCallback } from "@/src/lib/bitrixbot/resolve-missed-call-case-by-callback";
 
 export type CallbackResolutionSummary = {
   scannedCases: number;

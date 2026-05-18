@@ -1,5 +1,5 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { normalizeBitrixUserId } from "@/lib/bitrixbot/bitrix-user-id";
+import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
 
 export type MissingManagerFromCallsDetail = {
   managerBitrixUserId: string;

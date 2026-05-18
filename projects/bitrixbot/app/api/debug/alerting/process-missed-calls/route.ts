@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
-import { processNewMissedCallEvents } from "@/lib/bitrixbot/process-new-missed-call-events";
+import { processNewMissedCallEvents } from "@/src/lib/bitrixbot/process-new-missed-call-events";
 
 const ROUTE_LOG = "[alerting:process-missed-calls:route]";
 

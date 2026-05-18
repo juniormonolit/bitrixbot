@@ -1,20 +1,20 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { buildDealDetailsUrl } from "@/lib/bitrixbot/deal-enrichment-from-activity";
+import { buildDealDetailsUrl } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
 import {
   getCrmActivityIdForDealMapping,
   isActivityDealMappingConfigured,
   parseBitrixActivityIdForMapping,
   resolveDealIdByActivityId
-} from "@/lib/bitrixbot/activity-deal-mapping";
-import { extractCallContext } from "@/lib/bitrixbot/extract-call-context";
+} from "@/src/lib/bitrixbot/activity-deal-mapping";
+import { extractCallContext } from "@/src/lib/bitrixbot/extract-call-context";
 import {
   evaluateMissedInboundCustomerCall,
   filterSkipReasonLabel
-} from "@/lib/bitrixbot/missed-inbound-customer-call";
-import { extractVoximplantDataPayload } from "@/lib/bitrixbot/voximplant-inbound-missed";
-import { lookupEmployeeByBitrixUserId } from "@/lib/bitrixbot/employee-lookup";
-import { safeJsonTopKeys, safeNestedKeys } from "@/lib/bitrixbot/payload-diag";
-import { normalizeBitrixUserId } from "@/lib/bitrixbot/bitrix-user-id";
+} from "@/src/lib/bitrixbot/missed-inbound-customer-call";
+import { extractVoximplantDataPayload } from "@/src/lib/bitrixbot/voximplant-inbound-missed";
+import { lookupEmployeeByBitrixUserId } from "@/src/lib/bitrixbot/employee-lookup";
+import { safeJsonTopKeys, safeNestedKeys } from "@/src/lib/bitrixbot/payload-diag";
+import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
 
 const LOG = "[alerting:process-missed-calls]";
 

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { rebuildOrgResolvedHierarchy } from "@/lib/bitrixbot/resolve-org-hierarchy";
-import { isAlertingDebugRequestAuthorized } from "@/lib/bitrixbot/debug-request-secret";
+import { rebuildOrgResolvedHierarchy } from "@/src/lib/bitrixbot/resolve-org-hierarchy";
+import { isAlertingDebugRequestAuthorized } from "@/src/lib/bitrixbot/debug-request-secret";
 
 const LOG = "[sync-org-debug] rebuild-hierarchy";
 const TIMEOUT_MS = 120_000;

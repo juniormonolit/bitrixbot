@@ -1,15 +1,15 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { normalizeBitrixUserId } from "@/lib/bitrixbot/bitrix-user-id";
-import { withTimeout } from "@/lib/bitrixbot/async-timeout";
+import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
+import { withTimeout } from "@/src/lib/bitrixbot/async-timeout";
 import {
   prepareNotificationsForMissedCallCase,
   type PrepareRuleEvaluationSnapshot
-} from "@/lib/bitrixbot/prepare-notifications-for-missed-call-case";
+} from "@/src/lib/bitrixbot/prepare-notifications-for-missed-call-case";
 import {
   upsertMissedCallCaseFromEvent,
   type UpsertMissedCallCaseResult
-} from "@/lib/bitrixbot/upsert-missed-call-case-from-event";
-import { chunkIdsForInFilter } from "@/lib/bitrixbot/supabase-in-filter-chunks";
+} from "@/src/lib/bitrixbot/upsert-missed-call-case-from-event";
+import { chunkIdsForInFilter } from "@/src/lib/bitrixbot/supabase-in-filter-chunks";
 
 const LOG = "[alerting:process-missed-calls]";
 

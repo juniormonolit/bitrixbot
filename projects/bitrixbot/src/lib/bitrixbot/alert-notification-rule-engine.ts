@@ -1,4 +1,4 @@
-import type { RecipientRole } from "@/lib/bitrixbot/recipient-roles";
+import type { RecipientRole } from "@/src/lib/bitrixbot/recipient-roles";
 
 export type AlertRecipientType = "responsible_manager" | "rop" | "director" | "manual_user_id";
 

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { openCaseNeedsDealBackfill, reEnrichMissedCallCaseDeal } from "@/lib/bitrixbot/re-enrich-case-deal";
+import { openCaseNeedsDealBackfill, reEnrichMissedCallCaseDeal } from "@/src/lib/bitrixbot/re-enrich-case-deal";
 
 function isAuthorized(req: Request): boolean {
   const header = req.headers.get("x-debug-secret") ?? "";

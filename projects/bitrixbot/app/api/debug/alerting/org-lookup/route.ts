@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { bitrixUserIdLookupCandidates, normalizeBitrixUserId } from "@/lib/bitrixbot/bitrix-user-id";
-import { debugComputeHierarchyForBitrixUser } from "@/lib/bitrixbot/resolve-org-hierarchy";
+import { bitrixUserIdLookupCandidates, normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
+import { debugComputeHierarchyForBitrixUser } from "@/src/lib/bitrixbot/resolve-org-hierarchy";
 
 function isAuthorized(req: Request): boolean {
   const header = req.headers.get("x-debug-secret") ?? "";

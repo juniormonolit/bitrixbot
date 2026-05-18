@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
-import { processNoCallbackEscalations } from "@/lib/bitrixbot/process-no-callback-escalations";
+import { processNoCallbackEscalations } from "@/src/lib/bitrixbot/process-no-callback-escalations";
 
 function isAuthorized(req: Request): boolean {
   const header = req.headers.get("x-debug-secret") ?? "";

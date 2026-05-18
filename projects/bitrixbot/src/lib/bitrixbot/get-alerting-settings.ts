@@ -1,5 +1,5 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { DEFAULT_MIRROR_BITRIX_USER_ID } from "@/lib/bitrixbot/alerting-constants";
+import { DEFAULT_MIRROR_BITRIX_USER_ID } from "@/src/lib/bitrixbot/alerting-constants";
 
 export type AlertingSettings = {
   sending_enabled: boolean;

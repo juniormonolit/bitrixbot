@@ -1,16 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { renderMessageTemplate } from "@/lib/bitrixbot/render-message-template";
-import type { AlertingDashboardSummary } from "@/lib/bitrixbot/alerting-dashboard";
+import { renderMessageTemplate } from "@/src/lib/bitrixbot/render-message-template";
+import type { AlertingDashboardSummary } from "@/src/lib/bitrixbot/alerting-dashboard";
 import {
   alertingModeLabel,
   deriveAlertingMode,
   DEFAULT_MIRROR_BITRIX_USER_ID
-} from "@/lib/bitrixbot/alerting-mode";
-import type { AlertingSettings } from "@/lib/bitrixbot/get-alerting-settings";
-import type { CallEventManagerDiagnostics } from "@/lib/bitrixbot/call-event-manager-diagnostics";
-import type { AlertNotificationRuleRow } from "@/lib/bitrixbot/alert-notification-rule-engine";
+} from "@/src/lib/bitrixbot/alerting-mode";
+import type { AlertingSettings } from "@/src/lib/bitrixbot/get-alerting-settings";
+import type { CallEventManagerDiagnostics } from "@/src/lib/bitrixbot/call-event-manager-diagnostics";
+import type { AlertNotificationRuleRow } from "@/src/lib/bitrixbot/alert-notification-rule-engine";
 import { ManualActions } from "./manual-actions";
 import { OrgHierarchyBrowser } from "./org-hierarchy-browser";
 import { NotificationRulesPanel } from "./notification-rules-panel";

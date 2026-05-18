@@ -1,6 +1,6 @@
-import { normalizeBitrixUserId } from "@/lib/bitrixbot/bitrix-user-id";
-import { resolveCallTypeDigits } from "@/lib/bitrixbot/call-event-outbound";
-import { extractVoximplantDataPayload } from "@/lib/bitrixbot/voximplant-inbound-missed";
+import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
+import { resolveCallTypeDigits } from "@/src/lib/bitrixbot/call-event-outbound";
+import { extractVoximplantDataPayload } from "@/src/lib/bitrixbot/voximplant-inbound-missed";
 
 type JsonObject = Record<string, unknown>;
 

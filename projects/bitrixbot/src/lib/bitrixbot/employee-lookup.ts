@@ -1,5 +1,5 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { bitrixUserIdLookupCandidates, normalizeBitrixUserId } from "@/lib/bitrixbot/bitrix-user-id";
+import { bitrixUserIdLookupCandidates, normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
 
 export type EmployeeLookupResult = {
   managerName: string | null;

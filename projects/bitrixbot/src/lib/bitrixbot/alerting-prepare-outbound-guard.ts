@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { withTimeout } from "@/lib/bitrixbot/async-timeout";
-import { callEventHasOutboundSignals } from "@/lib/bitrixbot/call-event-outbound";
-import { collectCallEventIdsFromCaseContext } from "@/lib/bitrixbot/case-call-events";
+import { withTimeout } from "@/src/lib/bitrixbot/async-timeout";
+import { callEventHasOutboundSignals } from "@/src/lib/bitrixbot/call-event-outbound";
+import { collectCallEventIdsFromCaseContext } from "@/src/lib/bitrixbot/case-call-events";
 
 const DB_MS = 2_500;
 

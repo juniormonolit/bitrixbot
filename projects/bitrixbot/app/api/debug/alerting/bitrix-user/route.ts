@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { normalizeBitrixUserId } from "@/lib/bitrixbot/bitrix-user-id";
+import { normalizeBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
 
 function isAuthorized(req: Request): boolean {
   const header = req.headers.get("x-debug-secret") ?? "";

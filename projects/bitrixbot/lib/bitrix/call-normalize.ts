@@ -2,7 +2,7 @@ import { normalizePhoneForAnalytics } from "@/lib/bitrix/phone-normalize";
 import {
   computeVoximplantStoredStatus,
   readCallDurationSecondsBestEffort
-} from "@/lib/bitrixbot/voximplant-inbound-missed";
+} from "@/src/lib/bitrixbot/voximplant-inbound-missed";
 
 type JsonObject = Record<string, unknown>;
 

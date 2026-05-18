@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { extractVoximplantDataPayload } from "@/lib/bitrixbot/voximplant-inbound-missed";
+import { extractVoximplantDataPayload } from "@/src/lib/bitrixbot/voximplant-inbound-missed";
 
 const LOG = "[activity-deal-mapping]";
 

@@ -1,5 +1,5 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { withTimeout } from "@/lib/bitrixbot/async-timeout";
+import { withTimeout } from "@/src/lib/bitrixbot/async-timeout";
 import {
   AlertNotificationRuleRow,
   defaultMessageLineForRecipientRole,
@@ -7,12 +7,12 @@ import {
   parseAlertRecipientSpecs,
   resolveAlertRecipients,
   type AlertRuleEvaluationContext
-} from "@/lib/bitrixbot/alert-notification-rule-engine";
+} from "@/src/lib/bitrixbot/alert-notification-rule-engine";
 import { formatPhoneForDisplay } from "@/lib/bitrix/phone-normalize";
-import { normalizeBitrixUserId, isValidAlertRecipientBitrixUserId } from "@/lib/bitrixbot/bitrix-user-id";
-import { dealUrlForMessageTemplate } from "@/lib/bitrixbot/deal-enrichment-from-activity";
-import { renderMessageTemplate } from "@/lib/bitrixbot/render-message-template";
-import { outboundActivityBlocksMissedPrepare } from "@/lib/bitrixbot/alerting-prepare-outbound-guard";
+import { normalizeBitrixUserId, isValidAlertRecipientBitrixUserId } from "@/src/lib/bitrixbot/bitrix-user-id";
+import { dealUrlForMessageTemplate } from "@/src/lib/bitrixbot/deal-enrichment-from-activity";
+import { renderMessageTemplate } from "@/src/lib/bitrixbot/render-message-template";
+import { outboundActivityBlocksMissedPrepare } from "@/src/lib/bitrixbot/alerting-prepare-outbound-guard";
 
 const LOG = "[alerting:prepare-notifications]";
 const DB_OP_MS = 2_500;

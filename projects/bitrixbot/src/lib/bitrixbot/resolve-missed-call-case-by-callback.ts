@@ -1,5 +1,5 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { findCallbackForCase } from "@/lib/bitrixbot/find-callback-for-case";
+import { findCallbackForCase } from "@/src/lib/bitrixbot/find-callback-for-case";
 
 type ResolveResultStatus = "resolved" | "skipped" | "noop";
 

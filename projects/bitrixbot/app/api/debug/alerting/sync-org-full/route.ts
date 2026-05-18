@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { isAlertingDebugRequestAuthorized } from "@/lib/bitrixbot/debug-request-secret";
+import { isAlertingDebugRequestAuthorized } from "@/src/lib/bitrixbot/debug-request-secret";
 import {
   syncOrgStructureFromBitrixAndRebuildWithLogs,
   type SyncOrgFullProgress
-} from "@/lib/bitrixbot/sync-org-structure-from-bitrix";
+} from "@/src/lib/bitrixbot/sync-org-structure-from-bitrix";
 
 const LOG = "[sync-org-full]";
 const SYNC_ORG_FULL_TIMEOUT_MS = 55_000;
