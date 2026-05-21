@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "next lint",
     "check:activity-mapping": "npx tsx scripts/check-activity-deal-mapping.ts",
+    "probe:user-login": "npx tsx scripts/probe-user-login.ts",
     "verify:deal-notification-guard": "npx tsx scripts/verify-deal-notification-guard.ts"
   },
   "dependencies": {

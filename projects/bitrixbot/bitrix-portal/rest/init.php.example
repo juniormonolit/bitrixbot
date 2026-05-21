@@ -1,0 +1,15 @@
+<?php
+/**
+ * Fragment for /local/php_interface/init.php (or site init.php) on on-premise Bitrix.
+ * Adjust path to BitrixbotUserLoginRest.php if you place the file elsewhere.
+ */
+
+$bitrixbotLoginRest = $_SERVER['DOCUMENT_ROOT'] . '/local/php_interface/bitrixbot/BitrixbotUserLoginRest.php';
+if (is_readable($bitrixbotLoginRest)) {
+    require_once $bitrixbotLoginRest;
+    AddEventHandler(
+        'rest',
+        'OnRestServiceBuildDescription',
+        ['BitrixbotUserLoginRest', 'onRestServiceBuildDescription']
+    );
+}

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { DEFAULT_BITRIX_USER_LOGINS_REST_METHOD } from "@/lib/bitrix/user-logins-rest";
 
 /**
  * Contexts where outbound Bitrix REST is permitted.
@@ -8,7 +9,15 @@ export type BitrixRestContext = "daily_company_structure_sync" | "bitrix_message
 
 const store = new AsyncLocalStorage<BitrixRestContext>();
 
-const SYNC_METHODS = new Set(["user.get", "department.get"]);
+const SYNC_METHODS_BASE = ["user.get", "user.current", "user.fields", "department.get"] as const;
+
+function buildSyncMethods(): Set<string> {
+  const methods = new Set<string>(SYNC_METHODS_BASE);
+  const loginsMethod = process.env.BITRIX_USER_LOGINS_REST_METHOD?.trim();
+  if (loginsMethod) methods.add(loginsMethod);
+  else methods.add(DEFAULT_BITRIX_USER_LOGINS_REST_METHOD);
+  return methods;
+}
 const DELIVERY_METHODS = new Set(["imbot.message.add", "im.notify.system.add"]);
 
 export function getBitrixRestContext(): BitrixRestContext | undefined {
@@ -33,12 +42,13 @@ export function assertBitrixRestCallAllowed(method: string): void {
   }
 
   if (ctx === "daily_company_structure_sync") {
-    if (!SYNC_METHODS.has(method)) {
+    const syncMethods = buildSyncMethods();
+    if (!syncMethods.has(method)) {
       console.error("[CRITICAL] Bitrix REST denied: method not allowed for company structure sync", {
         method
       });
       throw new Error(
-        `Bitrix REST method "${method}" is not allowed in daily_company_structure_sync (allowed: ${[...SYNC_METHODS].join(", ")}).`
+        `Bitrix REST method "${method}" is not allowed in daily_company_structure_sync (allowed: ${[...syncMethods].join(", ")}).`
       );
     }
     return;

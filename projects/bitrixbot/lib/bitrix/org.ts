@@ -3,6 +3,7 @@ import { runWithBitrixRestContext } from "@/lib/bitrix/bitrix-rest-context";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { fetchAllByRange } from "@/src/lib/supabase/fetch-all-by-range";
 import { resolveBitrixUserDepartmentIds } from "@/lib/bitrix/bitrix-user-departments";
+import { fetchBitrixUserLoginsMap, getBitrixUserLoginsRestMethod } from "@/lib/bitrix/user-logins-rest";
 
 export { normalizeDepartmentIdList, resolveBitrixUserDepartmentIds } from "@/lib/bitrix/bitrix-user-departments";
 
@@ -290,14 +291,47 @@ export async function syncEmployees(): Promise<{
   skipped: number;
   usersFetchedTotal: number;
   usersPagesFetched: number;
+  loginsMapped: number;
+  loginsRestMethod: string | null;
 }> {
   return runWithBitrixRestContext("daily_company_structure_sync", async () => {
     const supabase = createServiceRoleClient();
+    const loginsRestMethod = getBitrixUserLoginsRestMethod();
+    let loginByBitrixUserId = new Map<string, string>();
+
+    if (loginsRestMethod) {
+      try {
+        const logins = await fetchBitrixUserLoginsMap(loginsRestMethod);
+        loginByBitrixUserId = logins.loginByBitrixUserId;
+        console.log("[bitrix-org-sync] user_logins_rest loaded", {
+          method: loginsRestMethod,
+          mapSize: loginByBitrixUserId.size,
+          pagesFetched: logins.pagesFetched
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(
+          `[bitrix-org-sync] user_logins_rest failed method=${loginsRestMethod} — install PHP handler (docs/bitrix-login-custom-rest.md). error=${msg}`
+        );
+      }
+    } else {
+      console.log(
+        "[bitrix-org-sync] user_logins_rest skipped: set BITRIX_USER_LOGINS_REST_METHOD and MANAGER_BITRIX_REST_BASE_URL (mlt.managers.list webhook)"
+      );
+    }
+
     const { users: raw, usersFetchedTotal, usersPagesFetched } = await fetchBitrixUsersRawForSync();
 
     if (raw.length === 0) {
       console.log("[bitrix-org-sync] employees: nothing to upsert");
-      return { upserted: 0, skipped: 0, usersFetchedTotal, usersPagesFetched };
+      return {
+        upserted: 0,
+        skipped: 0,
+        usersFetchedTotal,
+        usersPagesFetched,
+        loginsMapped: 0,
+        loginsRestMethod
+      };
     }
 
     const deptRows = await fetchAllByRange<{ id: string; bitrix_department_id: string }>({
@@ -315,6 +349,7 @@ export async function syncEmployees(): Promise<{
 
     type EmployeeUpsert = {
       bitrix_user_id: string;
+      bitrix_login: string | null;
       name: string;
       department_id: string | null;
       rop_bitrix_user_id: null;
@@ -373,6 +408,7 @@ export async function syncEmployees(): Promise<{
       const fullName = `${u.NAME ?? ""} ${u.LAST_NAME ?? ""}`.trim();
       employees.push({
         bitrix_user_id: bitrixUserId,
+        bitrix_login: loginByBitrixUserId.get(bitrixUserId) ?? null,
         name: fullName || bitrixUserId,
         department_id,
         rop_bitrix_user_id: null,
@@ -383,7 +419,14 @@ export async function syncEmployees(): Promise<{
 
     if (employees.length === 0) {
       console.log("[bitrix-org-sync] employees: nothing to upsert after filters", { skipped });
-      return { upserted: 0, skipped, usersFetchedTotal, usersPagesFetched };
+      return {
+        upserted: 0,
+        skipped,
+        usersFetchedTotal,
+        usersPagesFetched,
+        loginsMapped: 0,
+        loginsRestMethod
+      };
     }
 
     const { error } = await supabase.from("employees").upsert(employees, {
@@ -392,14 +435,24 @@ export async function syncEmployees(): Promise<{
     if (error) throw new Error(`Supabase employees upsert failed: ${error.message}`);
 
     const withDepartment = employees.filter((e) => Boolean(e.department_id)).length;
+    const withLogin = employees.filter((e) => Boolean(e.bitrix_login)).length;
     console.log("[bitrix-org-sync] employees upserted", {
       count: employees.length,
       withDepartment,
+      withLogin,
       skipped,
       usersFetchedTotal,
-      usersPagesFetched
+      usersPagesFetched,
+      loginsRestMethod
     });
 
-    return { upserted: employees.length, skipped, usersFetchedTotal, usersPagesFetched };
+    return {
+      upserted: employees.length,
+      skipped,
+      usersFetchedTotal,
+      usersPagesFetched,
+      loginsMapped: withLogin,
+      loginsRestMethod
+    };
   });
 }

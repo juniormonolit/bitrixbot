@@ -27,7 +27,7 @@ export async function GET(req: Request) {
   const supabase = createServiceRoleClient();
   const { data: emp, error } = await supabase
     .from("employees")
-    .select("bitrix_user_id, name, department_id")
+    .select("bitrix_user_id, bitrix_login, name, department_id")
     .eq("bitrix_user_id", bitrixUserId)
     .maybeSingle();
 
@@ -46,12 +46,18 @@ export async function GET(req: Request) {
     });
   }
 
-  const typed = emp as { bitrix_user_id: string; name: string | null; department_id: string | null };
+  const typed = emp as {
+    bitrix_user_id: string;
+    bitrix_login: string | null;
+    name: string | null;
+    department_id: string | null;
+  };
 
   return NextResponse.json({
     ok: true,
     bitrixUserId,
     existsInLocalEmployees: true,
+    bitrixLogin: typed.bitrix_login,
     displayName: typed.name ?? typed.bitrix_user_id,
     departmentIdUuid: typed.department_id,
     note:

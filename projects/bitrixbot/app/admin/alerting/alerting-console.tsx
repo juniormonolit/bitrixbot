@@ -12,6 +12,7 @@ import type { AlertingSettings } from "@/src/lib/bitrixbot/get-alerting-settings
 import type { CallEventManagerDiagnostics } from "@/src/lib/bitrixbot/call-event-manager-diagnostics";
 import type { AlertNotificationRuleRow } from "@/src/lib/bitrixbot/alert-notification-rule-engine";
 import { ManualActions } from "./manual-actions";
+import { SyncStructureNowButton } from "./sync-structure-now-button";
 import { OrgHierarchyBrowser } from "./org-hierarchy-browser";
 import { NotificationRulesPanel } from "./notification-rules-panel";
 import { StatisticsPanel } from "./statistics-panel";
@@ -832,10 +833,8 @@ export function AlertingConsole(props: {
             </form>
           </Card>
 
-          <Card title="Обновить вручную">
-            <p className="mb-3 text-sm text-white/70">
-              Используйте блок «Ручные действия» на вкладке «Режим работы» → действие «Обновить структуру компании».
-            </p>
+          <Card title="Синхронизация структуры">
+            <SyncStructureNowButton debugSecret={props.secret} />
           </Card>
         </div>
       ) : null}
