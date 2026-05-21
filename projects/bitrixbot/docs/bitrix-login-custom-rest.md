@@ -14,6 +14,10 @@ MANAGER_BITRIX_REST_BASE_URL=https://portal/rest/USER/WEBHOOK/
 
 Синхронизация: cron `org-structure-refresh`, кнопка «Синхронизировать сейчас» в админке (вкладка «Структура»).
 
+- **Один запрос** `mlt.managers.list` вместо `user.get` + отдельного login-fetch.
+- **Кеш** `bitrix_managers_list_cache` (slim JSON, TTL `ORG_MANAGERS_LIST_CACHE_TTL_HOURS`, default 24).
+- Повторный sync в течение TTL не дергает Bitrix.
+
 ## Альтернатива: свой PHP-метод bitrixbot.user.logins.list
 
 На **коробочном** Bitrix24 можно добавить REST из `bitrix-portal/rest/` (если нет `mlt.managers.list`).

@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 
 const SYNC_ORG_FULL_URL = "/api/debug/alerting/sync-org-full";
-const CLIENT_TIMEOUT_MS = 130_000;
+const CLIENT_TIMEOUT_MS = 125_000;
 
 export function SyncStructureNowButton({ debugSecret }: { debugSecret: string }) {
   const router = useRouter();
@@ -27,7 +27,7 @@ export function SyncStructureNowButton({ debugSecret }: { debugSecret: string })
           "content-type": "application/json",
           "x-debug-secret": debugSecret
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ forceManagersRefresh: false }),
         signal: controller.signal
       });
 
@@ -64,7 +64,7 @@ export function SyncStructureNowButton({ debugSecret }: { debugSecret: string })
         {isRunning ? "Синхронизация…" : "Синхронизировать сейчас"}
       </button>
       <p className="mt-2 text-xs text-white/50">
-        Bitrix: отделы + сотрудники (в т.ч. логины через mlt.managers.list) → пересборка иерархии в Supabase.
+        Отделы (department.get) + сотрудники и логины (mlt.managers.list, кеш 24 ч) → иерархия. Повторный запуск в течение суток быстрее.
       </p>
 
       {lastError ? (

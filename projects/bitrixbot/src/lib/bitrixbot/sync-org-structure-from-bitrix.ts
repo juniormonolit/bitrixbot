@@ -30,7 +30,9 @@ const LOG = "[sync-org-full]";
 /**
  * Подтянуть департаменты и сотрудников из Bitrix24, затем пересобрать кэш иерархии.
  */
-export async function syncOrgStructureFromBitrixAndRebuild(): Promise<SyncOrgStructureFromBitrixResult> {
+export async function syncOrgStructureFromBitrixAndRebuild(options?: {
+  forceManagersRefresh?: boolean;
+}): Promise<SyncOrgStructureFromBitrixResult> {
   const {
     upserted: departmentsUpserted,
     departmentsFetchedTotal,
@@ -41,7 +43,9 @@ export async function syncOrgStructureFromBitrixAndRebuild(): Promise<SyncOrgStr
     skipped: employeesSkipped,
     usersFetchedTotal,
     usersPagesFetched
-  } = await syncEmployees();
+  } = await syncEmployees({
+    forceManagersRefresh: options?.forceManagersRefresh
+  });
   const hierarchy = await rebuildOrgResolvedHierarchy();
   return {
     departmentsUpserted,
@@ -59,7 +63,8 @@ export async function syncOrgStructureFromBitrixAndRebuild(): Promise<SyncOrgStr
  * Те же шаги, что sync-org-full, с логами и обновлением progress (для таймаута / диагностики).
  */
 export async function syncOrgStructureFromBitrixAndRebuildWithLogs(
-  progress: SyncOrgFullProgress
+  progress: SyncOrgFullProgress,
+  options?: { forceManagersRefresh?: boolean }
 ): Promise<SyncOrgStructureFromBitrixResult> {
   progress.lastStage = "sync_departments_start";
   console.log(`${LOG} stage=sync_departments_start`);
@@ -72,7 +77,9 @@ export async function syncOrgStructureFromBitrixAndRebuildWithLogs(
   progress.lastStage = "sync_employees_start";
   console.log(`${LOG} stage=sync_employees_start`);
   const tEmp = Date.now();
-  const employees = await syncEmployees();
+  const employees = await syncEmployees({
+    forceManagersRefresh: options?.forceManagersRefresh
+  });
   progress.partial = { ...progress.partial, employees };
   progress.lastStage = "sync_employees_done";
   console.log(`${LOG} stage=sync_employees_done durationMs=${Date.now() - tEmp}`);

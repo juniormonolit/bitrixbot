@@ -6,7 +6,10 @@ import {
 } from "@/src/lib/bitrixbot/sync-org-structure-from-bitrix";
 
 const LOG = "[sync-org-full]";
-const SYNC_ORG_FULL_TIMEOUT_MS = 55_000;
+const SYNC_ORG_FULL_TIMEOUT_MS = 120_000;
+
+/** Vercel / Node route max duration (seconds). */
+export const maxDuration = 120;
 
 export async function POST(req: Request) {
   if (!isAlertingDebugRequestAuthorized(req)) {
@@ -16,11 +19,19 @@ export async function POST(req: Request) {
   const startedAt = Date.now();
   const progress: SyncOrgFullProgress = { lastStage: "init" };
 
-  console.log(`${LOG} start`);
+  let forceManagersRefresh = false;
+  try {
+    const body = (await req.json()) as { forceManagersRefresh?: boolean };
+    forceManagersRefresh = body?.forceManagersRefresh === true;
+  } catch {
+    /* empty body */
+  }
+
+  console.log(`${LOG} start forceManagersRefresh=${forceManagersRefresh}`);
 
   try {
     const outcome = await Promise.race([
-      syncOrgStructureFromBitrixAndRebuildWithLogs(progress).then((result) => ({
+      syncOrgStructureFromBitrixAndRebuildWithLogs(progress, { forceManagersRefresh }).then((result) => ({
         type: "done" as const,
         result
       })),

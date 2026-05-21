@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { DEFAULT_BITRIX_USER_LOGINS_REST_METHOD } from "@/lib/bitrix/user-logins-rest";
+import { DEFAULT_MANAGERS_LIST_METHOD } from "@/lib/bitrix/managers-list-sync";
 
 /**
  * Contexts where outbound Bitrix REST is permitted.
@@ -15,7 +15,7 @@ function buildSyncMethods(): Set<string> {
   const methods = new Set<string>(SYNC_METHODS_BASE);
   const loginsMethod = process.env.BITRIX_USER_LOGINS_REST_METHOD?.trim();
   if (loginsMethod) methods.add(loginsMethod);
-  else methods.add(DEFAULT_BITRIX_USER_LOGINS_REST_METHOD);
+  else methods.add(DEFAULT_MANAGERS_LIST_METHOD);
   return methods;
 }
 const DELIVERY_METHODS = new Set(["imbot.message.add", "im.notify.system.add"]);

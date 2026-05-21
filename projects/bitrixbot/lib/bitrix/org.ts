@@ -3,7 +3,11 @@ import { runWithBitrixRestContext } from "@/lib/bitrix/bitrix-rest-context";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { fetchAllByRange } from "@/src/lib/supabase/fetch-all-by-range";
 import { resolveBitrixUserDepartmentIds } from "@/lib/bitrix/bitrix-user-departments";
-import { fetchBitrixUserLoginsMap, getBitrixUserLoginsRestMethod } from "@/lib/bitrix/user-logins-rest";
+import {
+  getManagersListForSync,
+  isManagersListSyncConfigured,
+  type ManagersListSlimRow
+} from "@/lib/bitrix/managers-list-sync";
 
 export { normalizeDepartmentIdList, resolveBitrixUserDepartmentIds } from "@/lib/bitrix/bitrix-user-departments";
 
@@ -286,41 +290,52 @@ export async function syncDepartments(): Promise<{
   });
 }
 
-export async function syncEmployees(): Promise<{
+export async function syncEmployees(options?: {
+  /** Bypass Supabase cache for mlt.managers.list */
+  forceManagersRefresh?: boolean;
+}): Promise<{
   upserted: number;
   skipped: number;
   usersFetchedTotal: number;
   usersPagesFetched: number;
   loginsMapped: number;
   loginsRestMethod: string | null;
+  managersListSource: "cache" | "bitrix" | "user.get" | null;
 }> {
   return runWithBitrixRestContext("daily_company_structure_sync", async () => {
     const supabase = createServiceRoleClient();
-    const loginsRestMethod = getBitrixUserLoginsRestMethod();
-    let loginByBitrixUserId = new Map<string, string>();
+    let raw: BitrixUser[] | ManagersListSlimRow[] = [];
+    let usersFetchedTotal = 0;
+    let usersPagesFetched = 0;
+    let managersListSource: "cache" | "bitrix" | "user.get" | null = null;
+    const loginsRestMethod = isManagersListSyncConfigured()
+      ? process.env.BITRIX_USER_LOGINS_REST_METHOD?.trim() ?? null
+      : null;
 
-    if (loginsRestMethod) {
-      try {
-        const logins = await fetchBitrixUserLoginsMap(loginsRestMethod);
-        loginByBitrixUserId = logins.loginByBitrixUserId;
-        console.log("[bitrix-org-sync] user_logins_rest loaded", {
-          method: loginsRestMethod,
-          mapSize: loginByBitrixUserId.size,
-          pagesFetched: logins.pagesFetched
-        });
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.error(
-          `[bitrix-org-sync] user_logins_rest failed method=${loginsRestMethod} — install PHP handler (docs/bitrix-login-custom-rest.md). error=${msg}`
-        );
-      }
+    if (isManagersListSyncConfigured()) {
+      const managers = await getManagersListForSync({
+        force: options?.forceManagersRefresh === true
+      });
+      raw = managers.users;
+      usersFetchedTotal = managers.rowCount;
+      usersPagesFetched = managers.pagesFetched;
+      managersListSource = managers.source;
+      console.log("[bitrix-org-sync] employees from managers_list", {
+        method: loginsRestMethod,
+        source: managers.source,
+        rowCount: managers.rowCount,
+        fetchedAt: managers.fetchedAt
+      });
     } else {
+      const legacy = await fetchBitrixUsersRawForSync();
+      raw = legacy.users;
+      usersFetchedTotal = legacy.usersFetchedTotal;
+      usersPagesFetched = legacy.usersPagesFetched;
+      managersListSource = "user.get";
       console.log(
-        "[bitrix-org-sync] user_logins_rest skipped: set BITRIX_USER_LOGINS_REST_METHOD and MANAGER_BITRIX_REST_BASE_URL (mlt.managers.list webhook)"
+        "[bitrix-org-sync] employees from user.get (set BITRIX_USER_LOGINS_REST_METHOD + MANAGER_BITRIX_REST_BASE_URL for mlt.managers.list)"
       );
     }
-
-    const { users: raw, usersFetchedTotal, usersPagesFetched } = await fetchBitrixUsersRawForSync();
 
     if (raw.length === 0) {
       console.log("[bitrix-org-sync] employees: nothing to upsert");
@@ -330,7 +345,8 @@ export async function syncEmployees(): Promise<{
         usersFetchedTotal,
         usersPagesFetched,
         loginsMapped: 0,
-        loginsRestMethod
+        loginsRestMethod,
+        managersListSource
       };
     }
 
@@ -406,9 +422,11 @@ export async function syncEmployees(): Promise<{
       }
 
       const fullName = `${u.NAME ?? ""} ${u.LAST_NAME ?? ""}`.trim();
+      const loginFromRow =
+        "LOGIN" in u && u.LOGIN != null ? String(u.LOGIN).trim() || null : null;
       employees.push({
         bitrix_user_id: bitrixUserId,
-        bitrix_login: loginByBitrixUserId.get(bitrixUserId) ?? null,
+        bitrix_login: loginFromRow,
         name: fullName || bitrixUserId,
         department_id,
         rop_bitrix_user_id: null,
@@ -425,7 +443,8 @@ export async function syncEmployees(): Promise<{
         usersFetchedTotal,
         usersPagesFetched,
         loginsMapped: 0,
-        loginsRestMethod
+        loginsRestMethod,
+        managersListSource
       };
     }
 
@@ -452,7 +471,8 @@ export async function syncEmployees(): Promise<{
       usersFetchedTotal,
       usersPagesFetched,
       loginsMapped: withLogin,
-      loginsRestMethod
+      loginsRestMethod,
+      managersListSource
     };
   });
 }

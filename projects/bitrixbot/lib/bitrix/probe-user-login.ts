@@ -1,10 +1,10 @@
 import { bitrixCall } from "@/lib/bitrix/client";
 import { runWithBitrixRestContext } from "@/lib/bitrix/bitrix-rest-context";
 import {
-  DEFAULT_BITRIX_USER_LOGINS_REST_METHOD,
-  fetchBitrixUserLoginsMap,
-  getBitrixUserLoginsRestMethod
-} from "@/lib/bitrix/user-logins-rest";
+  DEFAULT_MANAGERS_LIST_METHOD,
+  getManagersListForSync,
+  getManagersListRestMethod
+} from "@/lib/bitrix/managers-list-sync";
 
 type JsonUser = Record<string, unknown>;
 
@@ -175,22 +175,24 @@ export async function probeBitrixUserLoginField(input: {
       );
     }
 
-    const customRestMethod =
-      getBitrixUserLoginsRestMethod() ?? DEFAULT_BITRIX_USER_LOGINS_REST_METHOD;
+    const customRestMethod = getManagersListRestMethod() ?? DEFAULT_MANAGERS_LIST_METHOD;
     let customRestOk = false;
     let customRestError: string | null = null;
     let customRestLoginForUser: string | null = null;
     let customRestMapSize = 0;
+    let managersListSource: "cache" | "bitrix" | null = null;
 
     try {
-      const { loginByBitrixUserId, rowsFetched } = await fetchBitrixUserLoginsMap(customRestMethod);
-      customRestMapSize = rowsFetched;
-      customRestOk = rowsFetched > 0;
+      const managers = await getManagersListForSync({ force: true });
+      managersListSource = managers.source;
+      customRestMapSize = managers.rowCount;
+      customRestOk = managers.rowCount > 0;
       if (bitrixUserId) {
-        customRestLoginForUser = loginByBitrixUserId.get(bitrixUserId) ?? null;
+        const hit = managers.users.find((u) => u.ID === bitrixUserId);
+        customRestLoginForUser = hit?.LOGIN ?? null;
       }
       if (!customRestOk) {
-        customRestError = "method_responded_but_no_logins (install PHP handler?)";
+        customRestError = "method_responded_but_no_rows";
       }
     } catch (e) {
       customRestError = e instanceof Error ? e.message : String(e);
@@ -219,7 +221,7 @@ export async function probeBitrixUserLoginField(input: {
       conclusion =
         "user.fields объявляет LOGIN, но user.get не вернул поле — проверьте select/scope (нужен scope user).";
     } else if (customRestOk && customRestLoginForUser) {
-      conclusion = `Стандартный user.get без LOGIN; кастомный ${customRestMethod} работает (login=${customRestLoginForUser}). Включите BITRIX_USER_LOGINS_REST_METHOD и sync employees.`;
+      conclusion = `user.get без LOGIN; ${customRestMethod} работает (login=${customRestLoginForUser}, source=${managersListSource}).`;
     } else if (customRestOk) {
       conclusion = `Кастомный ${customRestMethod} отвечает (${customRestMapSize} логинов), но для bitrixUserId=${bitrixUserId ?? "?"} login не найден.`;
     } else {
@@ -227,7 +229,7 @@ export async function probeBitrixUserLoginField(input: {
         ? " Фильтр filter[LOGIN] игнорируется (вернулось 50 пользователей)."
         : "";
       conclusion =
-        `Стандартный REST не отдаёт LOGIN.${filterNote} Установите PHP из bitrix-portal/rest (docs/bitrix-login-custom-rest.md) и BITRIX_USER_LOGINS_REST_METHOD=${customRestMethod}.`;
+        `Стандартный REST не отдаёт LOGIN.${filterNote} Проверьте MANAGER_BITRIX_REST_BASE_URL и BITRIX_USER_LOGINS_REST_METHOD=${customRestMethod}.`;
     }
 
     let recommendedNextStep: string;
