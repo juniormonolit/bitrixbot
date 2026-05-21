@@ -5,11 +5,14 @@ import { useMemo, useState } from "react";
 export type OrgHierarchyRow = {
   id: string;
   manager_bitrix_user_id: string;
+  manager_bitrix_login: string | null;
   manager_name: string | null;
   department_name: string | null;
   rop_bitrix_user_id: string | null;
+  rop_bitrix_login: string | null;
   rop_name: string | null;
   director_bitrix_user_id: string | null;
+  director_bitrix_login: string | null;
   director_name: string | null;
   resolved_at: string;
 };
@@ -42,10 +45,13 @@ export function OrgHierarchyBrowser(props: { rows: OrgHierarchyRow[]; stats: Org
       if (t) {
         const hay = [
           r.manager_bitrix_user_id,
+          r.manager_bitrix_login ?? "",
           r.manager_name ?? "",
           r.rop_bitrix_user_id ?? "",
+          r.rop_bitrix_login ?? "",
           r.rop_name ?? "",
           r.director_bitrix_user_id ?? "",
+          r.director_bitrix_login ?? "",
           r.director_name ?? "",
           r.department_name ?? ""
         ]
@@ -132,15 +138,18 @@ export function OrgHierarchyBrowser(props: { rows: OrgHierarchyRow[]; stats: Org
 
       <Card title="Менеджер → РОП → директор (org_resolved_hierarchy)">
         <div className="max-h-[min(70vh,720px)] overflow-auto">
-          <table className="w-full min-w-[56rem] text-left text-xs">
+          <table className="w-full min-w-[68rem] text-left text-xs">
             <thead className="sticky top-0 z-[1] bg-zinc-900/95 text-white/60">
               <tr>
-                <th className="py-2 pr-2">Менеджер Bitrix ID</th>
+                <th className="py-2 pr-2">Менеджер ID</th>
+                <th className="py-2 pr-2">Логин</th>
                 <th className="py-2 pr-2">Менеджер</th>
                 <th className="py-2 pr-2">Отдел</th>
-                <th className="py-2 pr-2">РОП Bitrix ID</th>
+                <th className="py-2 pr-2">РОП ID</th>
+                <th className="py-2 pr-2">Логин</th>
                 <th className="py-2 pr-2">РОП</th>
-                <th className="py-2 pr-2">Директор Bitrix ID</th>
+                <th className="py-2 pr-2">Директор ID</th>
+                <th className="py-2 pr-2">Логин</th>
                 <th className="py-2 pr-2">Директор</th>
                 <th className="py-2">resolved_at</th>
               </tr>
@@ -149,14 +158,23 @@ export function OrgHierarchyBrowser(props: { rows: OrgHierarchyRow[]; stats: Org
               {filtered.map((r) => (
                 <tr key={r.id} className="border-t border-white/10 align-top">
                   <td className="py-2 pr-2 font-mono">{String(r.manager_bitrix_user_id)}</td>
+                  <td className="max-w-[7rem] py-2 pr-2 font-mono text-[11px] text-emerald-200/90 [overflow-wrap:anywhere]">
+                    {r.manager_bitrix_login ?? "—"}
+                  </td>
                   <td className="max-w-[10rem] py-2 pr-2 [overflow-wrap:anywhere]">{r.manager_name ?? "—"}</td>
                   <td className="max-w-[10rem] py-2 pr-2 [overflow-wrap:anywhere]">{r.department_name ?? "—"}</td>
                   <td className="py-2 pr-2 font-mono text-[11px]">
                     {r.rop_bitrix_user_id != null ? String(r.rop_bitrix_user_id) : "—"}
                   </td>
+                  <td className="max-w-[7rem] py-2 pr-2 font-mono text-[11px] text-emerald-200/90 [overflow-wrap:anywhere]">
+                    {r.rop_bitrix_login ?? "—"}
+                  </td>
                   <td className="max-w-[10rem] py-2 pr-2 [overflow-wrap:anywhere]">{r.rop_name ?? "—"}</td>
                   <td className="py-2 pr-2 font-mono text-[11px]">
                     {r.director_bitrix_user_id != null ? String(r.director_bitrix_user_id) : "—"}
+                  </td>
+                  <td className="max-w-[7rem] py-2 pr-2 font-mono text-[11px] text-emerald-200/90 [overflow-wrap:anywhere]">
+                    {r.director_bitrix_login ?? "—"}
                   </td>
                   <td className="max-w-[10rem] py-2 pr-2 [overflow-wrap:anywhere]">{r.director_name ?? "—"}</td>
                   <td className="whitespace-nowrap py-2 text-[10px] text-white/50">{r.resolved_at}</td>

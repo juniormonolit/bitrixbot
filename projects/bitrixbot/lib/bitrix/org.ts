@@ -11,6 +11,8 @@ import {
 
 export { normalizeDepartmentIdList, resolveBitrixUserDepartmentIds } from "@/lib/bitrix/bitrix-user-departments";
 
+const EMPLOYEES_UPSERT_BATCH = 100;
+
 type BitrixDepartment = {
   ID: string | number;
   NAME?: string;
@@ -448,15 +450,28 @@ export async function syncEmployees(options?: {
       };
     }
 
-    const { error } = await supabase.from("employees").upsert(employees, {
-      onConflict: "bitrix_user_id"
-    });
-    if (error) throw new Error(`Supabase employees upsert failed: ${error.message}`);
+    for (let i = 0; i < employees.length; i += EMPLOYEES_UPSERT_BATCH) {
+      const batch = employees.slice(i, i + EMPLOYEES_UPSERT_BATCH);
+      const { error } = await supabase.from("employees").upsert(batch, {
+        onConflict: "bitrix_user_id"
+      });
+      if (error) {
+        throw new Error(
+          `Supabase employees upsert failed (batch offset=${i}, size=${batch.length}): ${error.message}`
+        );
+      }
+      console.log("[bitrix-org-sync] employees_upsert_batch", {
+        offset: i,
+        batchSize: batch.length,
+        total: employees.length
+      });
+    }
 
     const withDepartment = employees.filter((e) => Boolean(e.department_id)).length;
     const withLogin = employees.filter((e) => Boolean(e.bitrix_login)).length;
     console.log("[bitrix-org-sync] employees upserted", {
       count: employees.length,
+      batches: Math.ceil(employees.length / EMPLOYEES_UPSERT_BATCH),
       withDepartment,
       withLogin,
       skipped,

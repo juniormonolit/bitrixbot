@@ -89,40 +89,61 @@ type HierDbRow = {
   resolved_at: string;
 };
 
-function mapHierarchyRow(r: HierDbRow): OrgHierarchyRow {
+function mapHierarchyRow(r: HierDbRow, loginsByBitrixUserId: Map<string, string | null>): OrgHierarchyRow {
   const dirId = r.department_director_bitrix_user_id?.trim()
     ? r.department_director_bitrix_user_id.trim()
     : r.company_director_bitrix_user_id?.trim() || null;
   const dirName = r.department_director_bitrix_user_id?.trim()
     ? r.department_director_name ?? null
     : r.company_director_name ?? null;
+  const ropId = r.rop_bitrix_user_id?.trim() || null;
   return {
     id: r.id,
     manager_bitrix_user_id: r.manager_bitrix_user_id,
+    manager_bitrix_login: loginsByBitrixUserId.get(r.manager_bitrix_user_id) ?? null,
     manager_name: r.manager_name,
     department_name: r.department_name,
-    rop_bitrix_user_id: r.rop_bitrix_user_id,
+    rop_bitrix_user_id: ropId,
+    rop_bitrix_login: ropId ? (loginsByBitrixUserId.get(ropId) ?? null) : null,
     rop_name: r.rop_name,
     director_bitrix_user_id: dirId,
+    director_bitrix_login: dirId ? (loginsByBitrixUserId.get(dirId) ?? null) : null,
     director_name: dirName,
     resolved_at: r.resolved_at
   };
+}
+
+async function fetchEmployeeLoginsByBitrixUserId(): Promise<Map<string, string | null>> {
+  const supabase = createServiceRoleClient();
+  const rows = await fetchAllByRange<{ bitrix_user_id: string; bitrix_login: string | null }>({
+    pageSize: PAGE,
+    fetchPage: (from, to) =>
+      supabase.from("employees").select("bitrix_user_id, bitrix_login").order("bitrix_user_id", { ascending: true }).range(from, to)
+  });
+  const map = new Map<string, string | null>();
+  for (const row of rows) {
+    map.set(String(row.bitrix_user_id), row.bitrix_login);
+  }
+  return map;
 }
 
 async function fetchOrgHierarchyRows(): Promise<OrgHierarchyRow[]> {
   const supabase = createServiceRoleClient();
   const select =
     "id, manager_bitrix_user_id, manager_name, department_name, rop_bitrix_user_id, rop_name, department_director_bitrix_user_id, department_director_name, company_director_bitrix_user_id, company_director_name, resolved_at";
-  const all = await fetchAllByRange<HierDbRow>({
-    pageSize: PAGE,
-    fetchPage: (from, to) =>
-      supabase
-        .from("org_resolved_hierarchy")
-        .select(select)
-        .order("manager_bitrix_user_id", { ascending: true })
-        .range(from, to)
-  });
-  return all.map(mapHierarchyRow);
+  const [all, loginsByBitrixUserId] = await Promise.all([
+    fetchAllByRange<HierDbRow>({
+      pageSize: PAGE,
+      fetchPage: (from, to) =>
+        supabase
+          .from("org_resolved_hierarchy")
+          .select(select)
+          .order("manager_bitrix_user_id", { ascending: true })
+          .range(from, to)
+    }),
+    fetchEmployeeLoginsByBitrixUserId()
+  ]);
+  return all.map((r) => mapHierarchyRow(r, loginsByBitrixUserId));
 }
 
 function computeHierarchyStats(rows: OrgHierarchyRow[]): OrgHierarchyStats {
